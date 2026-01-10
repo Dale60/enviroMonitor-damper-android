@@ -9,11 +9,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.example.damperlocator.ble.DamperDevice
+import com.example.damperlocator.ui.ScanResultUi
 
 @Composable
 fun IdentifyScreen(
-    device: DamperDevice,
+    device: ScanResultUi,
     onIdentify: () -> Unit,
     onBack: () -> Unit
 ) {
