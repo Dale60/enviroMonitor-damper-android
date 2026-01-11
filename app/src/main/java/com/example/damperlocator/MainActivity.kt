@@ -3,6 +3,7 @@ package com.example.damperlocator
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.location.LocationManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import android.bluetooth.BluetoothManager
 import com.example.damperlocator.ui.MainViewModel
 import com.example.damperlocator.ui.Screen
 import com.example.damperlocator.ui.screens.ScanScreen
@@ -35,35 +37,69 @@ class MainActivity : ComponentActivity() {
             DamperLocatorTheme {
                 val screen by vm.screen.collectAsState()
                 val results by vm.scanResults.collectAsState()
+                val favorites by vm.favoriteResults.collectAsState()
                 val isScanning by vm.isScanning.collectAsState()
+                val filterMode by vm.filterMode.collectAsState()
                 val context = LocalContext.current
                 val lifecycleOwner = LocalLifecycleOwner.current
 
-                val requiredPermissions = remember {
+                val scanPermissions = remember {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         arrayOf(
                             Manifest.permission.BLUETOOTH_SCAN,
-                            Manifest.permission.BLUETOOTH_CONNECT
+                            Manifest.permission.ACCESS_FINE_LOCATION
                         )
                     } else {
                         arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
                     }
                 }
 
-                var hasPermissions by remember {
-                    mutableStateOf(hasAllPermissions(context, requiredPermissions))
+                val connectPermissions = remember {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        arrayOf(Manifest.permission.BLUETOOTH_CONNECT)
+                    } else {
+                        emptyArray()
+                    }
+                }
+
+                val requestPermissions = remember {
+                    scanPermissions + connectPermissions
+                }
+
+                var hasScanPermissions by remember {
+                    mutableStateOf(hasAllPermissions(context, scanPermissions))
+                }
+
+                var hasConnectPermission by remember {
+                    mutableStateOf(hasAllPermissions(context, connectPermissions))
+                }
+
+                val requiresLocation = remember {
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+                }
+
+                var isLocationReady by remember {
+                    mutableStateOf(isLocationEnabled(context))
+                }
+
+                var isBluetoothEnabled by remember {
+                    mutableStateOf(isBluetoothEnabled(context))
                 }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestMultiplePermissions()
                 ) { resultsMap ->
-                    hasPermissions = resultsMap.values.all { it }
+                    hasScanPermissions = hasAllPermissions(context, scanPermissions)
+                    hasConnectPermission = hasAllPermissions(context, connectPermissions)
                 }
 
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
-                            hasPermissions = hasAllPermissions(context, requiredPermissions)
+                        hasScanPermissions = hasAllPermissions(context, scanPermissions)
+                        hasConnectPermission = hasAllPermissions(context, connectPermissions)
+                        isLocationReady = isLocationEnabled(context)
+                        isBluetoothEnabled = isBluetoothEnabled(context)
                         }
                     }
                     lifecycleOwner.lifecycle.addObserver(observer)
@@ -72,8 +108,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(screen, hasPermissions) {
-                    if (screen is Screen.Scan && hasPermissions) {
+                LaunchedEffect(screen, hasScanPermissions, isLocationReady, isBluetoothEnabled) {
+                    if (
+                        screen is Screen.Scan &&
+                        hasScanPermissions &&
+                        (isLocationReady || !requiresLocation) &&
+                        isBluetoothEnabled
+                    ) {
                         vm.startScanning()
                     } else {
                         vm.stopScanning()
@@ -83,16 +124,26 @@ class MainActivity : ComponentActivity() {
                 when (val s = screen) {
                     is Screen.Scan -> ScanScreen(
                         isScanning = isScanning,
-                        hasPermissions = hasPermissions,
+                        hasPermissions = hasScanPermissions,
+                        isBluetoothEnabled = isBluetoothEnabled,
+                        isLocationEnabled = isLocationReady,
+                        requiresLocation = requiresLocation,
+                        filterMode = filterMode,
+                        favorites = favorites,
                         results = results,
                         onRequestPermissions = {
-                            permissionLauncher.launch(requiredPermissions)
+                            permissionLauncher.launch(requestPermissions)
                         },
+                        onFilterChange = { vm.setFilterMode(it) },
                         onSelect = { vm.selectDevice(it) }
                     )
                     is Screen.Identify -> IdentifyScreen(
                         device = s.device,
+                        canIdentify = hasConnectPermission,
                         onIdentify = { vm.identify(s.device) },
+                        onRequestPermissions = {
+                            permissionLauncher.launch(requestPermissions)
+                        },
                         onBack = { vm.backToScan() }
                     )
                 }
@@ -104,6 +155,22 @@ class MainActivity : ComponentActivity() {
         return permissions.all {
             ContextCompat.checkSelfPermission(context, it) ==
                 android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun isBluetoothEnabled(context: android.content.Context): Boolean {
+        val manager = context.getSystemService(BluetoothManager::class.java)
+        return manager?.adapter?.isEnabled == true
+    }
+
+    private fun isLocationEnabled(context: android.content.Context): Boolean {
+        val manager = context.getSystemService(LocationManager::class.java)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            manager?.isLocationEnabled == true
+        } else {
+            val gpsEnabled = manager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
+            val networkEnabled = manager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+            gpsEnabled || networkEnabled
         }
     }
 }

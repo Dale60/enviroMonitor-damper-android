@@ -7,23 +7,32 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.example.damperlocator.ui.FilterMode
 import com.example.damperlocator.ui.ScanResultUi
 
 @Composable
 fun ScanScreen(
     isScanning: Boolean,
     hasPermissions: Boolean,
+    isBluetoothEnabled: Boolean,
+    isLocationEnabled: Boolean,
+    requiresLocation: Boolean,
+    filterMode: FilterMode,
+    favorites: List<ScanResultUi>,
     results: List<ScanResultUi>,
     onRequestPermissions: () -> Unit,
+    onFilterChange: (FilterMode) -> Unit,
     onSelect: (ScanResultUi) -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
@@ -39,19 +48,75 @@ fun ScanScreen(
             return
         }
 
+        if (!isBluetoothEnabled) {
+            Text(text = "Bluetooth is off. Turn it on to scan.")
+            return
+        }
+
+        if (!isLocationEnabled && requiresLocation) {
+            Text(text = "Location services are off. Enable location to scan.")
+            return
+        }
+
+        if (!isLocationEnabled && !requiresLocation) {
+            Text(text = "Location services are off. Some devices may not scan.")
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
         if (isScanning) {
             Text(text = "Scanning...")
             Spacer(modifier = Modifier.height(8.dp))
         }
 
+        Text(text = "Filter")
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterButton(
+                label = "All",
+                selected = filterMode == FilterMode.ALL,
+                onClick = { onFilterChange(FilterMode.ALL) }
+            )
+            FilterButton(
+                label = "Beacons",
+                selected = filterMode == FilterMode.BEACONS,
+                onClick = { onFilterChange(FilterMode.BEACONS) }
+            )
+            FilterButton(
+                label = "Nordic",
+                selected = filterMode == FilterMode.NORDIC,
+                onClick = { onFilterChange(FilterMode.NORDIC) }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        if (favorites.isNotEmpty()) {
+            Text(text = "Favorites")
+            Spacer(modifier = Modifier.height(6.dp))
+            favorites.forEach { device ->
+                DeviceRow(device = device, onSelect = onSelect)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        } else {
+            Text(text = "Favorites not seen yet.")
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
         if (results.isEmpty()) {
-            Text(text = "No beacons detected yet.")
+            Text(text = "No devices detected yet.")
             return
         }
 
         Text(text = "Top devices")
         Spacer(modifier = Modifier.height(8.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 360.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(results) { device ->
                 DeviceRow(device = device, onSelect = onSelect)
             }
@@ -84,4 +149,17 @@ private fun rssiBars(rssi: Int): String {
     val clamped = rssi.coerceIn(-100, -40)
     val level = ((clamped + 100) / 12).coerceIn(0, 5)
     return "|".repeat(level).padEnd(5, ' ')
+}
+
+@Composable
+private fun FilterButton(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick) {
+            Text(text = label)
+        }
+    } else {
+        OutlinedButton(onClick = onClick) {
+            Text(text = label)
+        }
+    }
 }

@@ -36,8 +36,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanResults = MutableStateFlow<List<ScanResultUi>>(emptyList())
     val scanResults: StateFlow<List<ScanResultUi>> = _scanResults.asStateFlow()
 
+    private val _favoriteResults = MutableStateFlow<List<ScanResultUi>>(emptyList())
+    val favoriteResults: StateFlow<List<ScanResultUi>> = _favoriteResults.asStateFlow()
+
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
+    private val _filterMode = MutableStateFlow(FilterMode.BEACONS)
+    val filterMode: StateFlow<FilterMode> = _filterMode.asStateFlow()
 
     private val appContext = getApplication<Application>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -49,7 +55,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var cleanupJob: Job? = null
 
     fun startScanning() {
-        if (_isScanning.value || !hasScanPermission()) {
+        if (_isScanning.value) {
+            return
+        }
+        if (!hasScanPermission()) {
             return
         }
         val adapter = bluetoothAdapter() ?: return
@@ -78,7 +87,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         scanCallback = callback
         try {
-            scanner?.startScan(null, settings, callback)
+            scanner?.startScan(emptyList(), settings, callback)
             _isScanning.value = true
             startCleanup()
         } catch (_: SecurityException) {
@@ -129,6 +138,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _screen.value = Screen.Scan
     }
 
+    fun setFilterMode(mode: FilterMode) {
+        _filterMode.value = mode
+        updateResults()
+    }
+
     private fun bluetoothAdapter(): BluetoothAdapter? {
         val manager = appContext.getSystemService(BluetoothManager::class.java)
         return manager?.adapter
@@ -160,23 +174,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleScanResult(result: ScanResult) {
-        val record = result.scanRecord ?: return
-        val manufacturerData = record.manufacturerSpecificData
-        if (manufacturerData == null || manufacturerData.size() == 0) {
-            return
-        }
+        val record = result.scanRecord
         val device = result.device ?: return
-        val address = device.address
+        val address = device.address.uppercase()
         val now = System.currentTimeMillis()
+        val manufacturerData = record?.manufacturerSpecificData
+        val hasManufacturerData = manufacturerData?.size()?.let { it > 0 } == true
+        val hasNordicData =
+            manufacturerData?.indexOfKey(NORDIC_COMPANY_ID)?.let { it >= 0 } == true
 
         synchronized(lock) {
             val state = deviceStates[address] ?: DeviceState(
                 address = address,
-                name = device.name ?: record.deviceName
+                name = device.name ?: record?.deviceName
             )
-            state.name = device.name ?: record.deviceName ?: state.name
+            state.name = device.name ?: record?.deviceName ?: state.name
             state.lastSeenMs = now
             state.addRssi(result.rssi)
+            state.hasManufacturerData = state.hasManufacturerData || hasManufacturerData
+            state.hasNordicData = state.hasNordicData || hasNordicData
             deviceStates[address] = state
         }
 
@@ -208,12 +224,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        val uiResults = activeStates
+        val filteredStates = when (_filterMode.value) {
+            FilterMode.ALL -> activeStates
+            FilterMode.BEACONS -> activeStates.filter { it.hasManufacturerData }
+            FilterMode.NORDIC -> activeStates.filter { it.hasNordicData }
+        }
+
+        val favorites = activeStates.filter { FAVORITE_ADDRESSES.contains(it.address) }
+        val nonFavorites = filteredStates.filter { !FAVORITE_ADDRESSES.contains(it.address) }
+
+        val uiResults = nonFavorites
             .map { it.toUi() }
             .sortedByDescending { it.averageRssi }
             .take(MAX_RESULTS)
 
         _scanResults.value = uiResults
+        _favoriteResults.value = favorites
+            .map { it.toUi() }
+            .sortedByDescending { it.averageRssi }
     }
 
     private suspend fun connectAndIdentify(device: android.bluetooth.BluetoothDevice) {
@@ -289,9 +317,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+
     private data class DeviceState(
         val address: String,
         var name: String?,
+        var hasManufacturerData: Boolean = false,
+        var hasNordicData: Boolean = false,
         val rssiWindow: ArrayDeque<Int> = ArrayDeque(),
         var lastSeenMs: Long = 0L
     ) {
@@ -325,9 +356,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val DEFAULT_RSSI = -100
         private const val STALE_MS = 10_000L
         private const val CLEANUP_INTERVAL_MS = 1_000L
-        private const val MAX_RESULTS = 5
+        private const val MAX_RESULTS = 20
         private const val IDENTIFY_TIMEOUT_MS = 7_000L
         private const val IDENTIFY_PAYLOAD: Byte = 0x01
+        private const val NORDIC_COMPANY_ID = 0x0059
+        private val FAVORITE_ADDRESSES = setOf(
+            "D0:C9:A1:37:19:08",
+            "FD:9D:E6:96:73:E8"
+        )
         private val IDENTIFY_SERVICE_UUID =
             UUID.fromString("9f2a0001-2c3d-4e5f-8899-aabbccddeeff")
         private val IDENTIFY_CHARACTERISTIC_UUID =
