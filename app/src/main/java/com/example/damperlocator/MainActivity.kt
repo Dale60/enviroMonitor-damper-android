@@ -140,6 +140,7 @@ class MainActivity : ComponentActivity() {
                     is Screen.Identify -> IdentifyScreen(
                         device = s.device,
                         canIdentify = hasConnectPermission,
+                        onSaveLabel = { vm.setLabel(s.device.address, it) },
                         onIdentify = { vm.identify(s.device) },
                         onRequestPermissions = {
                             permissionLauncher.launch(requestPermissions)

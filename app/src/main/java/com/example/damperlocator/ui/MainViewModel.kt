@@ -11,6 +11,7 @@ import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.Context
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -46,6 +47,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val filterMode: StateFlow<FilterMode> = _filterMode.asStateFlow()
 
     private val appContext = getApplication<Application>()
+    private val labelPrefs = appContext.getSharedPreferences(LABEL_PREFS, Context.MODE_PRIVATE)
+    private val _labels = MutableStateFlow(loadLabels())
+    val labels: StateFlow<Map<String, String>> = _labels.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val deviceStates = mutableMapOf<String, DeviceState>()
     private val lock = Any()
@@ -143,6 +147,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateResults()
     }
 
+    fun setLabel(address: String, label: String) {
+        val key = address.uppercase()
+        val trimmed = label.trim()
+        val updated = _labels.value.toMutableMap()
+        if (trimmed.isBlank()) {
+            updated.remove(key)
+            labelPrefs.edit().remove(key).apply()
+        } else {
+            updated[key] = trimmed
+            labelPrefs.edit().putString(key, trimmed).apply()
+        }
+        _labels.value = updated
+        updateResults()
+    }
+
     private fun bluetoothAdapter(): BluetoothAdapter? {
         val manager = appContext.getSystemService(BluetoothManager::class.java)
         return manager?.adapter
@@ -230,17 +249,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             FilterMode.NORDIC -> activeStates.filter { it.hasNordicData }
         }
 
+        val labels = _labels.value
         val favorites = activeStates.filter { FAVORITE_ADDRESSES.contains(it.address) }
         val nonFavorites = filteredStates.filter { !FAVORITE_ADDRESSES.contains(it.address) }
 
         val uiResults = nonFavorites
-            .map { it.toUi() }
+            .map { it.toUi(labels[it.address]) }
             .sortedByDescending { it.averageRssi }
             .take(MAX_RESULTS)
 
         _scanResults.value = uiResults
         _favoriteResults.value = favorites
-            .map { it.toUi() }
+            .map { it.toUi(labels[it.address]) }
             .sortedByDescending { it.averageRssi }
     }
 
@@ -341,14 +361,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return total / rssiWindow.size
         }
 
-        fun toUi(): ScanResultUi {
+        fun toUi(label: String?): ScanResultUi {
             return ScanResultUi(
                 address = address,
                 name = name,
+                label = label,
                 averageRssi = averageRssi(),
                 lastSeenMs = lastSeenMs
             )
         }
+    }
+
+    private fun loadLabels(): Map<String, String> {
+        val stored = mutableMapOf<String, String>()
+        for ((key, value) in labelPrefs.all) {
+            if (value is String && value.isNotBlank()) {
+                stored[key] = value
+            }
+        }
+        return stored
     }
 
     private companion object {
@@ -360,6 +391,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val IDENTIFY_TIMEOUT_MS = 7_000L
         private const val IDENTIFY_PAYLOAD: Byte = 0x01
         private const val NORDIC_COMPANY_ID = 0x0059
+        private const val LABEL_PREFS = "device_labels"
         private val FAVORITE_ADDRESSES = setOf(
             "D0:C9:A1:37:19:08",
             "FD:9D:E6:96:73:E8"

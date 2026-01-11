@@ -126,7 +126,7 @@ fun ScanScreen(
 
 @Composable
 private fun DeviceRow(device: ScanResultUi, onSelect: (ScanResultUi) -> Unit) {
-    val label = device.name ?: device.address
+    val label = device.label ?: device.name ?: device.address
     val bars = rssiBars(device.averageRssi)
     Row(
         modifier = Modifier
@@ -137,6 +137,7 @@ private fun DeviceRow(device: ScanResultUi, onSelect: (ScanResultUi) -> Unit) {
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(text = label)
+            Text(text = device.address, fontFamily = FontFamily.Monospace)
             Text(
                 text = "RSSI $bars ${device.averageRssi} dBm",
                 fontFamily = FontFamily.Monospace
