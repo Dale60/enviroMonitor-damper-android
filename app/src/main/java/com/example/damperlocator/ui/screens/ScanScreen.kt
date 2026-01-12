@@ -31,6 +31,7 @@ fun ScanScreen(
     requiresLocation: Boolean,
     filterMode: FilterMode,
     sortMode: SortMode,
+    bestCandidate: ScanResultUi?,
     results: List<ScanResultUi>,
     onRequestPermissions: () -> Unit,
     onFilterChange: (FilterMode) -> Unit,
@@ -134,6 +135,23 @@ fun ScanScreen(
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
+
+        if (bestCandidate != null) {
+            val label = bestCandidate.label ?: bestCandidate.name ?: bestCandidate.address
+            val bars = rssiBars(bestCandidate.averageRssi)
+            Text(text = "Best signal (smoothed)")
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(text = label)
+            Text(text = bestCandidate.address, fontFamily = FontFamily.Monospace)
+            Text(
+                text = "RSSI $bars ${bestCandidate.averageRssi} dBm",
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+        } else {
+            Text(text = "Best signal (smoothed): none yet.")
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         if (results.isEmpty()) {
             Text(text = "No devices detected yet.")

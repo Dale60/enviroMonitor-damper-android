@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
             DamperLocatorTheme {
                 val screen by vm.screen.collectAsState()
                 val results by vm.scanResults.collectAsState()
+                val bestCandidate by vm.bestCandidate.collectAsState()
                 val isScanning by vm.isScanning.collectAsState()
                 val filterMode by vm.filterMode.collectAsState()
                 val sortMode by vm.sortMode.collectAsState()
@@ -195,6 +196,7 @@ class MainActivity : ComponentActivity() {
                         requiresLocation = requiresLocation,
                         filterMode = filterMode,
                         sortMode = sortMode,
+                        bestCandidate = bestCandidate,
                         results = results,
                         onRequestPermissions = {
                             permissionLauncher.launch(requestPermissions)

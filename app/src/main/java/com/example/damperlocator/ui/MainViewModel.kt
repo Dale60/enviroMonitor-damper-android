@@ -38,6 +38,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanResults = MutableStateFlow<List<ScanResultUi>>(emptyList())
     val scanResults: StateFlow<List<ScanResultUi>> = _scanResults.asStateFlow()
 
+    private val _bestCandidate = MutableStateFlow<ScanResultUi?>(null)
+    val bestCandidate: StateFlow<ScanResultUi?> = _bestCandidate.asStateFlow()
+
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
@@ -57,6 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val deviceStates = mutableMapOf<String, DeviceState>()
     private val lock = Any()
+
+    private var pendingBestAddress: String? = null
+    private var pendingBestHits = 0
 
     private var scanner: BluetoothLeScanner? = null
     private var scanCallback: ScanCallback? = null
@@ -312,12 +318,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val labels = _labels.value
         val photos = _photos.value
-        val uiResults = sortUi(
-            filteredStates.map { it.toUi(labels[it.address], photos[it.address]) },
-            _sortMode.value
-        ).take(MAX_RESULTS)
+        val allUiResults = filteredStates.map { it.toUi(labels[it.address], photos[it.address]) }
+        val uiResults = sortUi(allUiResults, _sortMode.value).take(MAX_RESULTS)
 
         _scanResults.value = uiResults
+        updateBestCandidate(allUiResults)
+    }
+
+    private fun updateBestCandidate(results: List<ScanResultUi>) {
+        if (results.isEmpty()) {
+            _bestCandidate.value = null
+            pendingBestAddress = null
+            pendingBestHits = 0
+            return
+        }
+        val currentBest = results.maxByOrNull { it.averageRssi }
+        val previous = _bestCandidate.value
+        val previousStillVisible = previous?.address?.let { address ->
+            results.any { it.address == address }
+        } == true
+        if (previous != null && !previousStillVisible) {
+            _bestCandidate.value = null
+            pendingBestAddress = null
+            pendingBestHits = 0
+        }
+        if (previous != null && currentBest != null && previous.address == currentBest.address) {
+            return
+        }
+        val requiredHits = BEST_CANDIDATE_STABLE_HITS
+        if (currentBest == null) {
+            _bestCandidate.value = null
+            pendingBestAddress = null
+            pendingBestHits = 0
+            return
+        }
+        if (pendingBestAddress == currentBest.address) {
+            pendingBestHits += 1
+        } else {
+            pendingBestAddress = currentBest.address
+            pendingBestHits = 1
+        }
+        if (pendingBestHits >= requiredHits) {
+            _bestCandidate.value = currentBest
+            pendingBestAddress = null
+            pendingBestHits = 0
+        }
     }
 
     private suspend fun connectAndIdentify(device: android.bluetooth.BluetoothDevice) {
@@ -468,6 +513,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val STALE_MS = 10_000L
         private const val CLEANUP_INTERVAL_MS = 1_000L
         private const val MAX_RESULTS = 20
+        private const val BEST_CANDIDATE_STABLE_HITS = 3
         private const val IDENTIFY_TIMEOUT_MS = 7_000L
         private const val IDENTIFY_PAYLOAD: Byte = 0x01
         private const val NORDIC_COMPANY_ID = 0x0059
