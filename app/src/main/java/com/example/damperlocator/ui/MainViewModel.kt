@@ -15,6 +15,7 @@ import android.content.Context
 import android.os.Build
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import org.json.JSONObject
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -46,10 +47,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _filterMode = MutableStateFlow(FilterMode.BEACONS)
     val filterMode: StateFlow<FilterMode> = _filterMode.asStateFlow()
 
+    private val _sortMode = MutableStateFlow(SortMode.SIGNAL)
+    val sortMode: StateFlow<SortMode> = _sortMode.asStateFlow()
+
     private val appContext = getApplication<Application>()
     private val labelPrefs = appContext.getSharedPreferences(LABEL_PREFS, Context.MODE_PRIVATE)
     private val _labels = MutableStateFlow(loadLabels())
     val labels: StateFlow<Map<String, String>> = _labels.asStateFlow()
+    private val photoPrefs = appContext.getSharedPreferences(PHOTO_PREFS, Context.MODE_PRIVATE)
+    private val _photos = MutableStateFlow(loadPhotos())
+    val photos: StateFlow<Map<String, String>> = _photos.asStateFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val deviceStates = mutableMapOf<String, DeviceState>()
     private val lock = Any()
@@ -147,6 +154,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateResults()
     }
 
+    fun setSortMode(mode: SortMode) {
+        _sortMode.value = mode
+        updateResults()
+    }
+
     fun setLabel(address: String, label: String) {
         val key = address.uppercase()
         val trimmed = label.trim()
@@ -158,6 +170,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updated[key] = trimmed
             labelPrefs.edit().putString(key, trimmed).apply()
         }
+        _labels.value = updated
+        updateResults()
+    }
+
+    fun setPhoto(address: String, path: String?) {
+        val key = address.uppercase()
+        val updated = _photos.value.toMutableMap()
+        if (path.isNullOrBlank()) {
+            updated.remove(key)
+            photoPrefs.edit().remove(key).apply()
+        } else {
+            updated[key] = path
+            photoPrefs.edit().putString(key, path).apply()
+        }
+        _photos.value = updated
+        updateResults()
+    }
+
+    fun exportLabelsJson(): String {
+        val json = JSONObject()
+        val labelsJson = JSONObject()
+        for ((key, value) in _labels.value) {
+            labelsJson.put(key, value)
+        }
+        json.put("labels", labelsJson)
+        return json.toString()
+    }
+
+    fun importLabelsJson(raw: String) {
+        val parsed = JSONObject(raw)
+        val labelsJson = if (parsed.has("labels")) {
+            parsed.getJSONObject("labels")
+        } else {
+            parsed
+        }
+        val updated = mutableMapOf<String, String>()
+        val keys = labelsJson.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = labelsJson.optString(key, "")
+            if (value.isNotBlank()) {
+                updated[key.uppercase()] = value.trim()
+            }
+        }
+        labelPrefs.edit().clear().apply()
+        val editor = labelPrefs.edit()
+        for ((key, value) in updated) {
+            editor.putString(key, value)
+        }
+        editor.apply()
         _labels.value = updated
         updateResults()
     }
@@ -250,18 +312,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val labels = _labels.value
+        val photos = _photos.value
         val favorites = activeStates.filter { FAVORITE_ADDRESSES.contains(it.address) }
         val nonFavorites = filteredStates.filter { !FAVORITE_ADDRESSES.contains(it.address) }
 
-        val uiResults = nonFavorites
-            .map { it.toUi(labels[it.address]) }
-            .sortedByDescending { it.averageRssi }
-            .take(MAX_RESULTS)
+        val uiResults = sortUi(
+            nonFavorites.map { it.toUi(labels[it.address], photos[it.address]) },
+            _sortMode.value
+        ).take(MAX_RESULTS)
 
         _scanResults.value = uiResults
-        _favoriteResults.value = favorites
-            .map { it.toUi(labels[it.address]) }
-            .sortedByDescending { it.averageRssi }
+        _favoriteResults.value = sortUi(
+            favorites.map { it.toUi(labels[it.address], photos[it.address]) },
+            _sortMode.value
+        )
     }
 
     private suspend fun connectAndIdentify(device: android.bluetooth.BluetoothDevice) {
@@ -361,11 +425,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return total / rssiWindow.size
         }
 
-        fun toUi(label: String?): ScanResultUi {
+        fun toUi(label: String?, photoPath: String?): ScanResultUi {
             return ScanResultUi(
                 address = address,
                 name = name,
                 label = label,
+                photoPath = photoPath,
                 averageRssi = averageRssi(),
                 lastSeenMs = lastSeenMs
             )
@@ -382,6 +447,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return stored
     }
 
+    private fun loadPhotos(): Map<String, String> {
+        val stored = mutableMapOf<String, String>()
+        for ((key, value) in photoPrefs.all) {
+            if (value is String && value.isNotBlank()) {
+                stored[key] = value
+            }
+        }
+        return stored
+    }
+
+    private fun sortUi(list: List<ScanResultUi>, mode: SortMode): List<ScanResultUi> {
+        return when (mode) {
+            SortMode.SIGNAL -> list.sortedByDescending { it.averageRssi }
+            SortMode.LABEL -> list.sortedWith(
+                compareBy(
+                    { (it.label ?: it.name ?: it.address).lowercase() },
+                    { it.address }
+                )
+            )
+            SortMode.ADDRESS -> list.sortedBy { it.address }
+        }
+    }
+
     private companion object {
         private const val RSSI_WINDOW_SIZE = 5
         private const val DEFAULT_RSSI = -100
@@ -392,6 +480,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val IDENTIFY_PAYLOAD: Byte = 0x01
         private const val NORDIC_COMPANY_ID = 0x0059
         private const val LABEL_PREFS = "device_labels"
+        private const val PHOTO_PREFS = "device_photos"
         private val FAVORITE_ADDRESSES = setOf(
             "D0:C9:A1:37:19:08",
             "FD:9D:E6:96:73:E8"

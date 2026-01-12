@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.damperlocator.ui.FilterMode
+import com.example.damperlocator.ui.SortMode
 import com.example.damperlocator.ui.ScanResultUi
 
 @Composable
@@ -29,10 +30,14 @@ fun ScanScreen(
     isLocationEnabled: Boolean,
     requiresLocation: Boolean,
     filterMode: FilterMode,
+    sortMode: SortMode,
     favorites: List<ScanResultUi>,
     results: List<ScanResultUi>,
     onRequestPermissions: () -> Unit,
     onFilterChange: (FilterMode) -> Unit,
+    onSortChange: (SortMode) -> Unit,
+    onExportLabels: () -> Unit,
+    onImportLabels: () -> Unit,
     onSelect: (ScanResultUi) -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
@@ -89,6 +94,45 @@ fun ScanScreen(
                 selected = filterMode == FilterMode.NORDIC,
                 onClick = { onFilterChange(FilterMode.NORDIC) }
             )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(text = "Sort")
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterButton(
+                label = "Signal",
+                selected = sortMode == SortMode.SIGNAL,
+                onClick = { onSortChange(SortMode.SIGNAL) }
+            )
+            FilterButton(
+                label = "Label",
+                selected = sortMode == SortMode.LABEL,
+                onClick = { onSortChange(SortMode.LABEL) }
+            )
+            FilterButton(
+                label = "Address",
+                selected = sortMode == SortMode.ADDRESS,
+                onClick = { onSortChange(SortMode.ADDRESS) }
+            )
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(text = "Labels")
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(onClick = onExportLabels) {
+                Text(text = "Export")
+            }
+            OutlinedButton(onClick = onImportLabels) {
+                Text(text = "Import")
+            }
         }
         Spacer(modifier = Modifier.height(8.dp))
 
