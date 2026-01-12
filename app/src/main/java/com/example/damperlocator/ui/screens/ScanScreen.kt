@@ -31,7 +31,6 @@ fun ScanScreen(
     requiresLocation: Boolean,
     filterMode: FilterMode,
     sortMode: SortMode,
-    favorites: List<ScanResultUi>,
     results: List<ScanResultUi>,
     onRequestPermissions: () -> Unit,
     onFilterChange: (FilterMode) -> Unit,
@@ -85,7 +84,7 @@ fun ScanScreen(
                 onClick = { onFilterChange(FilterMode.ALL) }
             )
             FilterButton(
-                label = "Beacons",
+                label = "DAMP",
                 selected = filterMode == FilterMode.BEACONS,
                 onClick = { onFilterChange(FilterMode.BEACONS) }
             )
@@ -135,18 +134,6 @@ fun ScanScreen(
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
-
-        if (favorites.isNotEmpty()) {
-            Text(text = "Favorites")
-            Spacer(modifier = Modifier.height(6.dp))
-            favorites.forEach { device ->
-                DeviceRow(device = device, onSelect = onSelect)
-            }
-            Spacer(modifier = Modifier.height(12.dp))
-        } else {
-            Text(text = "Favorites not seen yet.")
-            Spacer(modifier = Modifier.height(12.dp))
-        }
 
         if (results.isEmpty()) {
             Text(text = "No devices detected yet.")

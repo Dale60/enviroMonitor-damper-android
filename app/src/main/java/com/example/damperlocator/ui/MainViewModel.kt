@@ -38,9 +38,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _scanResults = MutableStateFlow<List<ScanResultUi>>(emptyList())
     val scanResults: StateFlow<List<ScanResultUi>> = _scanResults.asStateFlow()
 
-    private val _favoriteResults = MutableStateFlow<List<ScanResultUi>>(emptyList())
-    val favoriteResults: StateFlow<List<ScanResultUi>> = _favoriteResults.asStateFlow()
-
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
@@ -307,25 +304,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val filteredStates = when (_filterMode.value) {
             FilterMode.ALL -> activeStates
-            FilterMode.BEACONS -> activeStates.filter { it.hasManufacturerData }
+            FilterMode.BEACONS -> activeStates.filter {
+                it.name?.startsWith(DAMP_PREFIX, ignoreCase = true) == true
+            }
             FilterMode.NORDIC -> activeStates.filter { it.hasNordicData }
         }
 
         val labels = _labels.value
         val photos = _photos.value
-        val favorites = activeStates.filter { FAVORITE_ADDRESSES.contains(it.address) }
-        val nonFavorites = filteredStates.filter { !FAVORITE_ADDRESSES.contains(it.address) }
-
         val uiResults = sortUi(
-            nonFavorites.map { it.toUi(labels[it.address], photos[it.address]) },
+            filteredStates.map { it.toUi(labels[it.address], photos[it.address]) },
             _sortMode.value
         ).take(MAX_RESULTS)
 
         _scanResults.value = uiResults
-        _favoriteResults.value = sortUi(
-            favorites.map { it.toUi(labels[it.address], photos[it.address]) },
-            _sortMode.value
-        )
     }
 
     private suspend fun connectAndIdentify(device: android.bluetooth.BluetoothDevice) {
@@ -479,12 +471,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val IDENTIFY_TIMEOUT_MS = 7_000L
         private const val IDENTIFY_PAYLOAD: Byte = 0x01
         private const val NORDIC_COMPANY_ID = 0x0059
+        private const val DAMP_PREFIX = "DAMP"
         private const val LABEL_PREFS = "device_labels"
         private const val PHOTO_PREFS = "device_photos"
-        private val FAVORITE_ADDRESSES = setOf(
-            "D0:C9:A1:37:19:08",
-            "FD:9D:E6:96:73:E8"
-        )
         private val IDENTIFY_SERVICE_UUID =
             UUID.fromString("9f2a0001-2c3d-4e5f-8899-aabbccddeeff")
         private val IDENTIFY_CHARACTERISTIC_UUID =
