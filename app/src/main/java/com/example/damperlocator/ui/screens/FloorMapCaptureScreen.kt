@@ -119,6 +119,9 @@ fun FloorMapCaptureScreen(
     val currentRecordingState by rememberUpdatedState(captureState.recordingState)
     val currentOnUpdatePosition by rememberUpdatedState(onUpdatePosition)
 
+    // Collapsible instructions panel state
+    var instructionsExpanded by remember { mutableStateOf(true) }
+
     // Feedback helper for audio/haptic
     val feedbackHelper = remember { FeedbackHelper(context) }
     var lastPointCount by remember { mutableStateOf(0) }
@@ -239,9 +242,34 @@ fun FloorMapCaptureScreen(
                 }
             }
             else -> {
+                // Build AR markers from capture state
+                val arMarkers = remember(
+                    captureState.startPosition3d,
+                    captureState.cornerPoints3d,
+                    captureState.features
+                ) {
+                    ArMarkerData(
+                        startPosition = captureState.startPosition3d,
+                        cornerPositions = captureState.cornerPoints3d.drop(1),  // Skip first (it's the start)
+                        featurePositions = captureState.features.mapNotNull { feature ->
+                            feature.position3d?.let { pos ->
+                                val color = when (feature.type) {
+                                    FeatureType.DAMPER -> com.example.damperlocator.ar.MarkerRenderer.COLOR_DAMPER
+                                    FeatureType.HVAC_VENT -> com.example.damperlocator.ar.MarkerRenderer.COLOR_VENT
+                                    FeatureType.DOOR -> com.example.damperlocator.ar.MarkerRenderer.COLOR_DOOR
+                                    FeatureType.BEACON -> com.example.damperlocator.ar.MarkerRenderer.COLOR_BEACON
+                                    else -> com.example.damperlocator.ar.MarkerRenderer.COLOR_OTHER
+                                }
+                                pos to color
+                            }
+                        }
+                    )
+                }
+
                 // AR Camera View with continuous position tracking
                 ArCameraView(
                     isRecording = captureState.recordingState == RecordingState.RECORDING,
+                    markers = arMarkers,
                     onFrameUpdate = { frame, session, isPlaneDetected ->
                         onTrackingStateChanged(
                             if (frame.camera.trackingState == TrackingState.TRACKING)
@@ -302,221 +330,17 @@ fun FloorMapCaptureScreen(
                             distanceTraveled = captureState.distanceTraveled
                         )
 
-                        // Instructions panel - large and clear
-                        Column(
-                            modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
-                                .padding(16.dp)
-                                .width(190.dp)
-                        ) {
-                            when (captureState.recordingState) {
-                                RecordingState.IDLE -> {
-                                    // Phone orientation guidance
-                                    Text(
-                                        text = "HOW TO HOLD PHONE",
-                                        color = Color.Yellow,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Hold phone UPRIGHT (vertical) and point camera at the FLOOR ahead of you",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        lineHeight = 15.sp
-                                    )
-
-                                    Spacer(modifier = Modifier.height(12.dp))
-
-                                    Text(
-                                        text = "STEPS",
-                                        color = Color.Yellow,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 11.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-
-                                    Text(
-                                        text = "1. Stand in a corner",
-                                        color = Color.White,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = "2. Tap START below",
-                                        color = Color.White,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = "3. Walk the room edges",
-                                        color = Color.White,
-                                        fontSize = 12.sp
-                                    )
-                                    Text(
-                                        text = "4. Return to start",
-                                        color = Color.White,
-                                        fontSize = 12.sp
-                                    )
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "The map on the left will draw your path as you walk!",
-                                        color = Color.Cyan,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        lineHeight = 14.sp
-                                    )
-                                }
-                                RecordingState.RECORDING -> {
-                                    // Show different message based on progress
-                                    val distanceWalked = captureState.distanceTraveled
-
-                                    if (distanceWalked < 0.5f) {
-                                        // Just started - not moved yet
-                                        Text(
-                                            text = "RECORDING!",
-                                            color = Color.Red,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 18.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "WALK TO FIRST CORNER",
-                                            color = Color.White,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 18.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Walk to the next corner of the room, then tap MARK CORNER.",
-                                            color = Color.Gray,
-                                            fontSize = 12.sp,
-                                            lineHeight = 15.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Corners = straight walls!",
-                                            color = Color(0xFF2196F3),
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    } else if (isNearStart && distanceWalked > 2f) {
-                                        // Back at start!
-                                        Text(
-                                            text = "YOU'RE BACK!",
-                                            color = Color.Green,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 20.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Great! You've returned to the start point.",
-                                            color = Color.White,
-                                            fontSize = 14.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        // Remind about HVAC equipment if none marked
-                                        if (captureState.features.isEmpty()) {
-                                            Text(
-                                                text = "TIP: Mark any dampers or vents before finishing!",
-                                                color = Color(0xFF9C27B0),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 12.sp,
-                                                lineHeight = 15.sp
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                        }
-
-                                        Text(
-                                            text = "Tap the green FINISH button below!",
-                                            color = Color.Green,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp,
-                                            lineHeight = 18.sp
-                                        )
-                                    } else {
-                                        // In progress - walking
-                                        val cornerCount = captureState.cornerPoints.size
-
-                                        // Remind about corner marking if they've walked but not marked any
-                                        if (cornerCount == 0 && distanceWalked > 1.5f) {
-                                            Text(
-                                                text = "DON'T FORGET!",
-                                                color = Color.Yellow,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 16.sp
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = "Tap MARK WALL CORNER at each corner for straight walls on your map!",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                lineHeight = 15.sp
-                                            )
-                                        } else {
-                                            Text(
-                                                text = "GOOD! KEEP GOING",
-                                                color = Color.Cyan,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 16.sp
-                                            )
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                            Text(
-                                                text = "Walk along the walls. Tap MARK WALL CORNER at each turn.",
-                                                color = Color.White,
-                                                fontSize = 12.sp,
-                                                lineHeight = 15.sp
-                                            )
-                                        }
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "GOAL:",
-                                            color = Color.Yellow,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "Walk back to the GREEN dot (your start)",
-                                            color = Color.Green,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        captureState.distanceToStart?.let { dist ->
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text(
-                                                text = "Distance to start: %.1fm".format(dist),
-                                                color = if (dist < 1.5f) Color.Yellow else Color.Gray,
-                                                fontSize = 13.sp,
-                                                fontWeight = if (dist < 1.5f) FontWeight.Bold else FontWeight.Normal
-                                            )
-                                        }
-                                    }
-                                }
-                                RecordingState.COMPLETED -> {
-                                    Text(
-                                        text = "DONE!",
-                                        color = Color.Green,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Your floor map is ready!",
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp
-                                    )
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Tap SAVE to keep it, or RESET to try again.",
-                                        color = Color.Gray,
-                                        fontSize = 12.sp,
-                                        lineHeight = 15.sp
-                                    )
-                                }
-                            }
-                        }
+                        // Collapsible Instructions panel
+                        CollapsibleInstructionsPanel(
+                            recordingState = captureState.recordingState,
+                            distanceTraveled = captureState.distanceTraveled,
+                            distanceToStart = captureState.distanceToStart,
+                            cornerCount = captureState.cornerPoints.size,
+                            featureCount = captureState.features.size,
+                            isNearStart = isNearStart,
+                            expanded = instructionsExpanded,
+                            onToggle = { instructionsExpanded = !instructionsExpanded }
+                        )
                     }
 
                     Spacer(modifier = Modifier.weight(1f))
@@ -842,14 +666,202 @@ private fun FeaturePickerDialog(
 }
 
 @Composable
+private fun CollapsibleInstructionsPanel(
+    recordingState: RecordingState,
+    distanceTraveled: Float,
+    distanceToStart: Float?,
+    cornerCount: Int,
+    featureCount: Int,
+    isNearStart: Boolean,
+    expanded: Boolean,
+    onToggle: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+            .clickable { onToggle() }
+            .padding(12.dp)
+            .width(if (expanded) 180.dp else 140.dp)
+    ) {
+        // Header - always visible
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Status indicator
+            val (statusText, statusColor) = when (recordingState) {
+                RecordingState.IDLE -> "READY" to Color.Yellow
+                RecordingState.RECORDING -> {
+                    when {
+                        isNearStart && distanceTraveled > 2f -> "FINISH!" to Color.Green
+                        distanceTraveled < 0.5f -> "REC" to Color.Red
+                        else -> "MAPPING" to Color.Cyan
+                    }
+                }
+                RecordingState.COMPLETED -> "DONE" to Color.Green
+            }
+            Text(
+                text = statusText,
+                color = statusColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp
+            )
+            Text(
+                text = if (expanded) "▲" else "▼",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+        }
+
+        // Collapsed summary - key stats
+        if (!expanded) {
+            if (recordingState == RecordingState.RECORDING) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "📍 $cornerCount corners",
+                    color = Color.White,
+                    fontSize = 11.sp
+                )
+                distanceToStart?.let { dist ->
+                    Text(
+                        text = "→ %.1fm to start".format(dist),
+                        color = if (dist < 1.5f) Color.Yellow else Color.Gray,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+
+        // Expanded content
+        if (expanded) {
+            Spacer(modifier = Modifier.height(8.dp))
+
+            when (recordingState) {
+                RecordingState.IDLE -> {
+                    Text(
+                        text = "Hold phone upright, point at floor",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "1. Stand in corner\n2. Tap START\n3. Walk edges\n4. Return to start",
+                        color = Color.Gray,
+                        fontSize = 10.sp,
+                        lineHeight = 13.sp
+                    )
+                }
+                RecordingState.RECORDING -> {
+                    when {
+                        distanceTraveled < 0.5f -> {
+                            Text(
+                                text = "Walk to first corner, then tap MARK WALL CORNER",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                        }
+                        isNearStart && distanceTraveled > 2f -> {
+                            Text(
+                                text = "You're back! Tap FINISH below",
+                                color = Color.Green,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (featureCount == 0) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "TIP: Mark dampers first!",
+                                    color = Color(0xFF9C27B0),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                        cornerCount == 0 && distanceTraveled > 1.5f -> {
+                            Text(
+                                text = "Don't forget to mark corners!",
+                                color = Color.Yellow,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = "Walk walls, mark corners",
+                                color = Color.White,
+                                fontSize = 11.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "📍 $cornerCount corners",
+                                color = Color(0xFF2196F3),
+                                fontSize = 11.sp
+                            )
+                            if (featureCount > 0) {
+                                Text(
+                                    text = "🌀 $featureCount features",
+                                    color = Color(0xFF9C27B0),
+                                    fontSize = 11.sp
+                                )
+                            }
+                            distanceToStart?.let { dist ->
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "→ %.1fm to start".format(dist),
+                                    color = if (dist < 1.5f) Color.Yellow else Color.Gray,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (dist < 1.5f) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
+                RecordingState.COMPLETED -> {
+                    Text(
+                        text = "Map complete!",
+                        color = Color.White,
+                        fontSize = 12.sp
+                    )
+                    Text(
+                        text = "Tap SAVE or TRY AGAIN",
+                        color = Color.Gray,
+                        fontSize = 10.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Data class to hold AR markers that need to be rendered
+ */
+data class ArMarkerData(
+    val startPosition: Vector3? = null,
+    val cornerPositions: List<Vector3> = emptyList(),
+    val featurePositions: List<Pair<Vector3, Int>> = emptyList()  // Position and color
+)
+
+@Composable
 private fun ArCameraView(
     isRecording: Boolean,
+    markers: ArMarkerData,
     onFrameUpdate: (Frame, Session, Boolean) -> Unit,
     onPositionUpdate: (Vector3) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Thread-safe marker holder
+    val markerHolder = remember { ArMarkerHolder() }
+
+    // Update markers when they change
+    LaunchedEffect(markers) {
+        markerHolder.update(markers)
+    }
 
     var glSurfaceView by remember { mutableStateOf<GLSurfaceView?>(null) }
     var arSession by remember { mutableStateOf<Session?>(null) }
@@ -886,6 +898,7 @@ private fun ArCameraView(
                 holder.setFormat(android.graphics.PixelFormat.OPAQUE)
 
                 val backgroundRenderer = BackgroundRenderer()
+                val markerRenderer = com.example.damperlocator.ar.MarkerRenderer()
                 var session: Session? = null
                 var viewWidth = 0
                 var viewHeight = 0
@@ -901,6 +914,7 @@ private fun ArCameraView(
                         GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
 
                         val textureId = backgroundRenderer.createOnGlThread()
+                        markerRenderer.createOnGlThread()
 
                         try {
                             val activity = ctx as? android.app.Activity ?: return
@@ -957,6 +971,48 @@ private fun ArCameraView(
                                         onPositionUpdate(position)
                                     }
                                 }
+
+                                // Get view and projection matrices for marker rendering
+                                val viewMatrix = FloatArray(16)
+                                val projMatrix = FloatArray(16)
+                                camera.getViewMatrix(viewMatrix, 0)
+                                camera.getProjectionMatrix(projMatrix, 0, 0.1f, 100f)
+
+                                // Render AR markers
+                                val currentMarkers = markerHolder.get()
+
+                                // Draw start marker (green)
+                                currentMarkers.startPosition?.let { startPos ->
+                                    markerRenderer.drawMarker(
+                                        startPos,
+                                        com.example.damperlocator.ar.MarkerRenderer.COLOR_START,
+                                        viewMatrix,
+                                        projMatrix,
+                                        0.15f
+                                    )
+                                }
+
+                                // Draw corner markers (orange)
+                                currentMarkers.cornerPositions.forEach { cornerPos ->
+                                    markerRenderer.drawMarker(
+                                        cornerPos,
+                                        com.example.damperlocator.ar.MarkerRenderer.COLOR_CORNER,
+                                        viewMatrix,
+                                        projMatrix,
+                                        0.12f
+                                    )
+                                }
+
+                                // Draw feature markers (various colors)
+                                currentMarkers.featurePositions.forEach { (pos, color) ->
+                                    markerRenderer.drawMarker(
+                                        pos,
+                                        color,
+                                        viewMatrix,
+                                        projMatrix,
+                                        0.1f
+                                    )
+                                }
                             }
 
                             frameCount++
@@ -977,4 +1033,18 @@ private fun ArCameraView(
         },
         modifier = modifier
     )
+}
+
+/**
+ * Thread-safe holder for AR markers
+ */
+private class ArMarkerHolder {
+    @Volatile
+    private var markers: ArMarkerData = ArMarkerData()
+
+    fun update(newMarkers: ArMarkerData) {
+        markers = newMarkers
+    }
+
+    fun get(): ArMarkerData = markers
 }

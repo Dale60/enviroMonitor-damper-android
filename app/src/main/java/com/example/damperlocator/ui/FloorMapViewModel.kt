@@ -3,14 +3,17 @@ package com.example.damperlocator.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.damperlocator.floorplan.AnchorPlacementState
 import com.example.damperlocator.floorplan.ArTrackingState
 import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorMapCaptureState
 import com.example.damperlocator.floorplan.FloorPlan
 import com.example.damperlocator.floorplan.FloorPlanPin
 import com.example.damperlocator.floorplan.FloorPlanRepository
+import com.example.damperlocator.floorplan.MapAnchor
 import com.example.damperlocator.floorplan.PolygonCalculator
 import com.example.damperlocator.floorplan.RecordingState
+import com.example.damperlocator.floorplan.RelocalizationState
 import com.example.damperlocator.floorplan.RoomFeature
 import com.example.damperlocator.floorplan.Vector2
 import com.example.damperlocator.floorplan.Vector3
@@ -84,13 +87,16 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
      */
     fun startRecording(initialPosition: Vector3) {
         val startPos = Vector2(initialPosition.x, initialPosition.z)
-        android.util.Log.d("FloorMap", "Started recording at position: $startPos")
+        android.util.Log.d("FloorMap", "Started recording at position: $startPos (3D: $initialPosition)")
         _captureState.value = _captureState.value.copy(
             recordingState = RecordingState.RECORDING,
             pathPoints = listOf(startPos),
             cornerPoints = listOf(startPos),  // First corner is the start
+            cornerPoints3d = listOf(initialPosition),  // 3D start corner for AR
             currentPosition = startPos,
+            currentPosition3d = initialPosition,
             startPosition = startPos,
+            startPosition3d = initialPosition,  // 3D start for AR marker
             distanceTraveled = 0f,
             distanceToStart = 0f
         )
@@ -104,10 +110,12 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
         if (current.recordingState != RecordingState.RECORDING) return
 
         val pos = current.currentPosition ?: return
-        android.util.Log.d("FloorMap", "Marked corner #${current.cornerPoints.size + 1} at: $pos")
+        val pos3d = current.currentPosition3d
+        android.util.Log.d("FloorMap", "Marked corner #${current.cornerPoints.size + 1} at: $pos (3D: $pos3d)")
 
         _captureState.value = current.copy(
-            cornerPoints = current.cornerPoints + pos
+            cornerPoints = current.cornerPoints + pos,
+            cornerPoints3d = if (pos3d != null) current.cornerPoints3d + pos3d else current.cornerPoints3d
         )
     }
 
@@ -140,10 +148,12 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
     ) {
         val current = _captureState.value
         val pos = current.currentPosition ?: return
+        val pos3d = current.currentPosition3d
 
         val feature = RoomFeature(
             type = type,
             position = pos,
+            position3d = pos3d,
             label = label,
             photoPath = photoPath,
             bleDeviceAddress = bleDeviceAddress,
@@ -151,7 +161,7 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
             notes = notes
         )
 
-        android.util.Log.d("FloorMap", "Added feature: ${type.displayName} at $pos")
+        android.util.Log.d("FloorMap", "Added feature: ${type.displayName} at $pos (3D: $pos3d)")
 
         _captureState.value = current.copy(
             features = current.features + feature,
@@ -205,6 +215,7 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
             _captureState.value = current.copy(
                 pathPoints = pathPoints + newPoint,
                 currentPosition = newPoint,  // Always track current position for corner marking
+                currentPosition3d = position3d,  // Track 3D position for AR markers
                 distanceTraveled = newDistance,
                 distanceToStart = distToStart
             )
@@ -212,6 +223,7 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
             // Always update current position and distance to start
             _captureState.value = current.copy(
                 currentPosition = newPoint,
+                currentPosition3d = position3d,  // Track 3D position for AR markers
                 distanceToStart = distToStart
             )
         }
@@ -281,11 +293,12 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
             currentPins = pins
         )
 
-        // Update floor plan with corners and features
+        // Update floor plan with corners, features, and anchors
         _currentFloorPlan.value = _currentFloorPlan.value?.copy(
             pins = pins,
             cornerPoints = cornerPoints,
             features = current.features,  // Include all marked features
+            anchors = current.anchors,    // Include all placed anchors
             perimeterMeters = perimeter,
             areaSquareMeters = area,
             isClosed = closePath,
@@ -301,13 +314,21 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
             recordingState = RecordingState.IDLE,
             pathPoints = emptyList(),
             cornerPoints = emptyList(),
+            cornerPoints3d = emptyList(),
             features = emptyList(),
+            anchors = emptyList(),
             currentPosition = null,
+            currentPosition3d = null,
             startPosition = null,
+            startPosition3d = null,
             distanceTraveled = 0f,
             distanceToStart = null,
             currentPins = emptyList(),
-            showFeaturePicker = false
+            showFeaturePicker = false,
+            anchorPlacementState = AnchorPlacementState.NONE,
+            pendingAnchorLabel = null,
+            relocalization = RelocalizationState(),
+            pendingFeaturePhotoId = null
         )
     }
 
@@ -333,6 +354,179 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
                 y = window.map { it.y }.average().toFloat()
             )
         }
+    }
+
+    // ==================== Anchor Management (Incremental Mapping) ====================
+
+    /**
+     * Start anchor placement flow - user will walk to doorway and take a photo
+     */
+    fun startAnchorPlacement(label: String = "Doorway") {
+        _captureState.value = _captureState.value.copy(
+            anchorPlacementState = AnchorPlacementState.POSITIONING,
+            pendingAnchorLabel = label
+        )
+    }
+
+    /**
+     * User is at anchor position, ready to take photo
+     */
+    fun confirmAnchorPosition() {
+        _captureState.value = _captureState.value.copy(
+            anchorPlacementState = AnchorPlacementState.CAPTURING
+        )
+    }
+
+    /**
+     * Save anchor with photo at current position
+     */
+    fun saveAnchor(photoPath: String) {
+        val current = _captureState.value
+        val pos = current.currentPosition ?: return
+        val pos3d = current.currentPosition3d ?: return
+        val heading = compassManager.heading.value
+        val label = current.pendingAnchorLabel ?: "Anchor"
+
+        val anchor = MapAnchor(
+            position = pos,
+            position3d = pos3d,
+            compassHeading = heading,
+            photoPath = photoPath,
+            label = label
+        )
+
+        android.util.Log.d("FloorMap", "Saved anchor '$label' at $pos, heading=$heading")
+
+        _captureState.value = current.copy(
+            anchors = current.anchors + anchor,
+            anchorPlacementState = AnchorPlacementState.CONFIRMED,
+            pendingAnchorLabel = null
+        )
+
+        // Also add to floor plan
+        _currentFloorPlan.value = _currentFloorPlan.value?.copy(
+            anchors = (_currentFloorPlan.value?.anchors ?: emptyList()) + anchor
+        )
+    }
+
+    /**
+     * Cancel anchor placement
+     */
+    fun cancelAnchorPlacement() {
+        _captureState.value = _captureState.value.copy(
+            anchorPlacementState = AnchorPlacementState.NONE,
+            pendingAnchorLabel = null
+        )
+    }
+
+    /**
+     * Finish anchor placement flow
+     */
+    fun finishAnchorPlacement() {
+        _captureState.value = _captureState.value.copy(
+            anchorPlacementState = AnchorPlacementState.NONE
+        )
+    }
+
+    /**
+     * Start relocalization - continue mapping from existing anchor
+     */
+    fun startRelocalization(anchor: MapAnchor) {
+        android.util.Log.d("FloorMap", "Starting relocalization to anchor: ${anchor.label}")
+        _captureState.value = _captureState.value.copy(
+            relocalization = RelocalizationState(
+                isRelocalizing = true,
+                targetAnchor = anchor,
+                isMatched = false
+            )
+        )
+    }
+
+    /**
+     * User confirms they are at the anchor position - calculate coordinate offset
+     */
+    fun confirmRelocalization(currentPosition3d: Vector3) {
+        val current = _captureState.value
+        val targetAnchor = current.relocalization.targetAnchor ?: return
+
+        // Calculate offset between current position and anchor position
+        val offsetX = targetAnchor.position.x - currentPosition3d.x
+        val offsetY = targetAnchor.position.y - currentPosition3d.z
+
+        // Calculate rotation offset based on compass headings
+        val currentHeading = compassManager.heading.value
+        val rotationOffset = targetAnchor.compassHeading - currentHeading
+
+        android.util.Log.d("FloorMap", "Relocalization confirmed: offset=($offsetX, $offsetY), rotation=$rotationOffset")
+
+        _captureState.value = current.copy(
+            relocalization = current.relocalization.copy(
+                isMatched = true,
+                coordinateOffset = Vector2(offsetX, offsetY),
+                rotationOffset = rotationOffset
+            )
+        )
+    }
+
+    /**
+     * Cancel relocalization
+     */
+    fun cancelRelocalization() {
+        _captureState.value = _captureState.value.copy(
+            relocalization = RelocalizationState()
+        )
+    }
+
+    /**
+     * Apply relocalization offset to a position
+     */
+    fun applyRelocalizationOffset(position: Vector2): Vector2 {
+        val offset = _captureState.value.relocalization.coordinateOffset ?: return position
+        return Vector2(position.x + offset.x, position.y + offset.y)
+    }
+
+    /**
+     * Get all anchors from current floor plan
+     */
+    fun getAnchors(): List<MapAnchor> {
+        return _currentFloorPlan.value?.anchors ?: emptyList()
+    }
+
+    // ==================== Feature Photo Capture ====================
+
+    /**
+     * Request photo capture for a feature (after selecting feature type)
+     */
+    fun requestFeaturePhoto(featureId: String) {
+        _captureState.value = _captureState.value.copy(
+            pendingFeaturePhotoId = featureId
+        )
+    }
+
+    /**
+     * Save photo for pending feature
+     */
+    fun saveFeaturePhoto(photoPath: String) {
+        val current = _captureState.value
+        val featureId = current.pendingFeaturePhotoId ?: return
+
+        _captureState.value = current.copy(
+            features = current.features.map {
+                if (it.id == featureId) it.copy(photoPath = photoPath) else it
+            },
+            pendingFeaturePhotoId = null
+        )
+
+        android.util.Log.d("FloorMap", "Saved photo for feature $featureId: $photoPath")
+    }
+
+    /**
+     * Cancel pending feature photo
+     */
+    fun cancelFeaturePhoto() {
+        _captureState.value = _captureState.value.copy(
+            pendingFeaturePhotoId = null
+        )
     }
 
     // ==================== Legacy Pin Methods (kept for compatibility) ====================
