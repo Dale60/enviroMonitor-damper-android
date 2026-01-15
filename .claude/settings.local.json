@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout:*)",
+      "Bash(./gradlew assembleDebug:*)",
+      "Bash(adb install:*)",
+      "Bash(adb logcat:*)",
+      "Bash(timeout 5 adb logcat:*)",
+      "Bash(adb devices:*)",
+      "Bash(adb wait-for-device:*)",
+      "Bash(./gradlew installDebug:*)",
+      "Bash(adb shell am start:*)",
+      "Bash(adb shell:*)",
+      "Bash(echo:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

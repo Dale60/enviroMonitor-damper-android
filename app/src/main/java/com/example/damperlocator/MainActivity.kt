@@ -30,14 +30,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import android.bluetooth.BluetoothManager
+import com.example.damperlocator.ui.FloorMapViewModel
 import com.example.damperlocator.ui.MainViewModel
 import com.example.damperlocator.ui.Screen
-import com.example.damperlocator.ui.screens.ScanScreen
+import com.example.damperlocator.ui.screens.FloorMapCaptureScreen
+import com.example.damperlocator.ui.screens.FloorMapListScreen
+import com.example.damperlocator.ui.screens.FloorMapPreviewScreen
 import com.example.damperlocator.ui.screens.IdentifyScreen
+import com.example.damperlocator.ui.screens.ScanScreen
 import com.example.damperlocator.ui.theme.DamperLocatorTheme
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
+    private val floorMapVm: FloorMapViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,6 +58,15 @@ class MainActivity : ComponentActivity() {
                 val photos by vm.photos.collectAsState()
                 val context = LocalContext.current
                 val lifecycleOwner = LocalLifecycleOwner.current
+
+                // Floor map state
+                val floorMapScreen by floorMapVm.screen.collectAsState()
+                val floorPlans by floorMapVm.floorPlans.collectAsState()
+                val captureState by floorMapVm.captureState.collectAsState()
+                val currentFloorPlan by floorMapVm.currentFloorPlan.collectAsState()
+                val compassHeading by floorMapVm.compassHeading.collectAsState()
+                val devicePitch by floorMapVm.devicePitch.collectAsState()
+                val deviceRoll by floorMapVm.deviceRoll.collectAsState()
 
                 val scanPermissions = remember {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -159,6 +173,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Floor plan export
+                var pendingExportPlanId by remember { mutableStateOf<String?>(null) }
+                val exportFloorPlanLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.CreateDocument("application/json")
+                ) { uri ->
+                    val planId = pendingExportPlanId
+                    if (uri != null && planId != null) {
+                        val json = floorMapVm.exportFloorPlan(planId)
+                        if (json != null) {
+                            writeTextToUri(context, uri, json)
+                        }
+                    }
+                    pendingExportPlanId = null
+                }
+
                 DisposableEffect(lifecycleOwner) {
                     val observer = LifecycleEventObserver { _, event ->
                         if (event == Lifecycle.Event.ON_RESUME) {
@@ -174,9 +203,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(screen, hasScanPermissions, isLocationReady, isBluetoothEnabled) {
+                LaunchedEffect(screen, floorMapScreen, hasScanPermissions, isLocationReady, isBluetoothEnabled) {
+                    val isOnScanScreen = screen is Screen.Scan &&
+                        (floorMapScreen is Screen.Scan || floorMapScreen is Screen.Identify)
                     if (
-                        screen is Screen.Scan &&
+                        isOnScanScreen &&
                         hasScanPermissions &&
                         (isLocationReady || !requiresLocation) &&
                         isBluetoothEnabled
@@ -187,7 +218,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                when (val s = screen) {
+                // Determine which screen to show
+                val activeScreen = when {
+                    floorMapScreen !is Screen.Scan && floorMapScreen !is Screen.Identify -> floorMapScreen
+                    else -> screen
+                }
+
+                when (val s = activeScreen) {
                     is Screen.Scan -> ScanScreen(
                         isScanning = isScanning,
                         hasPermissions = hasScanPermissions,
@@ -208,6 +245,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onImportLabels = {
                             importLabelsLauncher.launch(arrayOf("application/json", "text/plain"))
+                        },
+                        onMapFloor = {
+                            floorMapVm.navigateTo(Screen.FloorMapList)
                         },
                         onSelect = { vm.selectDevice(it) }
                     )
@@ -245,6 +285,78 @@ class MainActivity : ComponentActivity() {
                             permissionLauncher.launch(requestPermissions)
                         },
                         onBack = { vm.backToScan() }
+                    )
+                    is Screen.FloorMapList -> FloorMapListScreen(
+                        floorPlans = floorPlans,
+                        onNewPlan = {
+                            floorMapVm.clearCurrentPlan()
+                            floorMapVm.startCapture(null)
+                            floorMapVm.navigateTo(Screen.FloorMapCapture(null))
+                        },
+                        onContinuePlan = { id ->
+                            floorMapVm.startCapture(id)
+                            floorMapVm.navigateTo(Screen.FloorMapCapture(id))
+                        },
+                        onViewPlan = { id ->
+                            floorMapVm.loadFloorPlan(id)
+                            floorMapVm.navigateTo(Screen.FloorMapPreview(id))
+                        },
+                        onDeletePlan = { id ->
+                            floorMapVm.deleteFloorPlan(id)
+                        },
+                        onBack = {
+                            floorMapVm.navigateTo(Screen.Scan)
+                        }
+                    )
+                    is Screen.FloorMapCapture -> FloorMapCaptureScreen(
+                        floorPlan = currentFloorPlan,
+                        captureState = captureState,
+                        compassHeading = compassHeading,
+                        devicePitch = devicePitch,
+                        deviceRoll = deviceRoll,
+                        onStartRecording = { position ->
+                            floorMapVm.startRecording(position)
+                        },
+                        onUpdatePosition = { position ->
+                            floorMapVm.updatePosition(position)
+                        },
+                        onStopRecording = { closePath ->
+                            floorMapVm.stopRecording(closePath)
+                        },
+                        onResetRecording = {
+                            floorMapVm.resetRecording()
+                        },
+                        isNearStart = floorMapVm.isNearStart(),
+                        onUpdateName = { floorMapVm.updateFloorPlanName(it) },
+                        onTrackingStateChanged = { state, isPlane ->
+                            floorMapVm.updateTrackingState(state, isPlane)
+                        },
+                        onSave = {
+                            floorMapVm.saveCurrentPlan()
+                            floorMapVm.stopCapture()
+                            floorMapVm.navigateTo(Screen.FloorMapList)
+                        },
+                        onBack = {
+                            floorMapVm.resetRecording()
+                            floorMapVm.stopCapture()
+                            floorMapVm.navigateTo(Screen.FloorMapList)
+                        }
+                    )
+                    is Screen.FloorMapPreview -> FloorMapPreviewScreen(
+                        floorPlan = currentFloorPlan,
+                        onContinue = {
+                            floorMapVm.startCapture(s.floorPlanId)
+                            floorMapVm.navigateTo(Screen.FloorMapCapture(s.floorPlanId))
+                        },
+                        onExport = {
+                            pendingExportPlanId = s.floorPlanId
+                            val name = currentFloorPlan?.name ?: "floorplan"
+                            exportFloorPlanLauncher.launch("$name.json")
+                        },
+                        onBack = {
+                            floorMapVm.clearCurrentPlan()
+                            floorMapVm.navigateTo(Screen.FloorMapList)
+                        }
                     )
                 }
             }

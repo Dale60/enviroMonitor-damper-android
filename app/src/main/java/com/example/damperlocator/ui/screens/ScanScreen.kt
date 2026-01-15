@@ -38,6 +38,7 @@ fun ScanScreen(
     onSortChange: (SortMode) -> Unit,
     onExportLabels: () -> Unit,
     onImportLabels: () -> Unit,
+    onMapFloor: () -> Unit,
     onSelect: (ScanResultUi) -> Unit
 ) {
     Column(modifier = Modifier.padding(16.dp)) {
@@ -133,6 +134,14 @@ fun ScanScreen(
             OutlinedButton(onClick = onImportLabels) {
                 Text(text = "Import")
             }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Button(
+            onClick = onMapFloor,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(text = "Map Floor")
         }
         Spacer(modifier = Modifier.height(8.dp))
 
