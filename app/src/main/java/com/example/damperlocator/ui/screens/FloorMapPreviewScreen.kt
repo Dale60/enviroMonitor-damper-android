@@ -27,8 +27,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorPlan
 import com.example.damperlocator.floorplan.PolygonCalculator
+import com.example.damperlocator.floorplan.RoomFeature
 import com.example.damperlocator.floorplan.Vector2
 import java.util.Locale
 import kotlin.math.max
@@ -59,8 +61,24 @@ fun FloorMapPreviewScreen(
         return
     }
 
-    val points2d = remember(floorPlan.pins) {
-        floorPlan.pins.map { it.position2d }
+    // Use cornerPoints if available (clean floor plan), otherwise fall back to pins
+    val points2d = remember(floorPlan.cornerPoints, floorPlan.pins) {
+        if (floorPlan.cornerPoints.isNotEmpty()) {
+            floorPlan.cornerPoints
+        } else {
+            floorPlan.pins.map { it.position2d }
+        }
+    }
+
+    val cornerCount = if (floorPlan.cornerPoints.isNotEmpty()) {
+        // Don't count the closing point if it's the same as start
+        if (floorPlan.isClosed && floorPlan.cornerPoints.size > 1) {
+            floorPlan.cornerPoints.size - 1
+        } else {
+            floorPlan.cornerPoints.size
+        }
+    } else {
+        floorPlan.pins.size
     }
 
     val boundingBox = remember(points2d) {
@@ -90,7 +108,11 @@ fun FloorMapPreviewScreen(
                     .padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                StatItem(label = "Pins", value = "${floorPlan.pins.size}")
+                StatItem(label = "Corners", value = "$cornerCount")
+
+                if (floorPlan.features.isNotEmpty()) {
+                    StatItem(label = "Features", value = "${floorPlan.features.size}")
+                }
 
                 floorPlan.perimeterMeters?.let {
                     StatItem(label = "Perimeter", value = formatDistance(it))
@@ -138,6 +160,7 @@ fun FloorMapPreviewScreen(
             } else {
                 PolygonCanvas(
                     points = points2d,
+                    features = floorPlan.features,
                     boundingBox = boundingBox,
                     isClosed = floorPlan.isClosed,
                     modifier = Modifier.fillMaxSize()
@@ -213,6 +236,7 @@ private fun StatItem(label: String, value: String) {
 @Composable
 private fun PolygonCanvas(
     points: List<Vector2>,
+    features: List<RoomFeature>,
     boundingBox: com.example.damperlocator.floorplan.BoundingBox,
     isClosed: Boolean,
     modifier: Modifier = Modifier
@@ -272,18 +296,52 @@ private fun PolygonCanvas(
             drawPath(path, Color.Cyan, style = Stroke(width = 3.dp.toPx()))
         }
 
-        // Draw points
+        // Draw corner points
         points.forEachIndexed { index, point ->
             val offset = transform(point)
 
             // Point marker
             drawCircle(
-                color = if (index == 0) Color.Green else if (index == points.lastIndex) Color.Red else Color.White,
+                color = if (index == 0) Color.Green else if (index == points.lastIndex && !isClosed) Color.Red else Color.White,
                 radius = 8.dp.toPx(),
                 center = offset
             )
             drawCircle(
                 color = Color.Black,
+                radius = 4.dp.toPx(),
+                center = offset
+            )
+        }
+
+        // Draw features with different colors per type
+        features.forEach { feature ->
+            val offset = transform(feature.position)
+            val featureColor = when (feature.type) {
+                FeatureType.DOOR -> Color(0xFF795548)      // Brown
+                FeatureType.BEACON -> Color(0xFF00BCD4)    // Cyan
+                FeatureType.DAMPER -> Color(0xFF9C27B0)    // Purple
+                FeatureType.HVAC_VENT -> Color(0xFF607D8B) // Blue Grey
+                FeatureType.HVAC_UNIT -> Color(0xFF3F51B5) // Indigo
+                FeatureType.THERMOSTAT -> Color(0xFFFF5722) // Deep Orange
+                FeatureType.PHOTO -> Color(0xFF8BC34A)     // Light Green
+                FeatureType.OTHER -> Color(0xFF9E9E9E)     // Grey
+            }
+
+            // Outer glow
+            drawCircle(
+                color = featureColor.copy(alpha = 0.3f),
+                radius = 14.dp.toPx(),
+                center = offset
+            )
+            // Feature circle
+            drawCircle(
+                color = featureColor,
+                radius = 10.dp.toPx(),
+                center = offset
+            )
+            // Inner dot
+            drawCircle(
+                color = Color.White,
                 radius = 4.dp.toPx(),
                 center = offset
             )

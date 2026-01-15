@@ -11,6 +11,7 @@ import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,12 +21,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -51,13 +59,17 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.example.damperlocator.ar.ArAvailabilityResult
 import com.example.damperlocator.ar.BackgroundRenderer
 import com.example.damperlocator.floorplan.ArTrackingState
+import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorMapCaptureState
 import com.example.damperlocator.floorplan.FloorPlan
 import com.example.damperlocator.floorplan.RecordingState
 import com.example.damperlocator.floorplan.Vector2
 import com.example.damperlocator.floorplan.Vector3
 import com.example.damperlocator.ui.components.FeedbackHelper
+import com.example.damperlocator.ui.components.FirstTimeOverlay
 import com.example.damperlocator.ui.components.PathMinimap
+import com.example.damperlocator.ui.components.hasSeenTutorial
+import com.example.damperlocator.ui.components.markTutorialSeen
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
@@ -76,6 +88,10 @@ fun FloorMapCaptureScreen(
     deviceRoll: Float,
     onStartRecording: (Vector3) -> Unit,
     onUpdatePosition: (Vector3) -> Unit,
+    onMarkCorner: () -> Unit,
+    onShowFeaturePicker: () -> Unit,
+    onHideFeaturePicker: () -> Unit,
+    onAddFeature: (FeatureType, String?) -> Unit,
     onStopRecording: (Boolean) -> Unit,
     onResetRecording: () -> Unit,
     isNearStart: Boolean,
@@ -86,6 +102,9 @@ fun FloorMapCaptureScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+
+    // First-time tutorial overlay
+    var showTutorial by remember { mutableStateOf(!hasSeenTutorial(context)) }
 
     var arAvailability by remember { mutableStateOf<ArAvailabilityResult?>(null) }
     var hasCameraPermission by remember {
@@ -276,6 +295,8 @@ fun FloorMapCaptureScreen(
                     ) {
                         PathMinimap(
                             pathPoints = captureState.pathPoints,
+                            cornerPoints = captureState.cornerPoints,
+                            features = captureState.features,
                             currentPosition = currentCameraPosition?.let { Vector2(it.x, it.z) },
                             isRecording = captureState.recordingState == RecordingState.RECORDING,
                             distanceTraveled = captureState.distanceTraveled
@@ -359,22 +380,22 @@ fun FloorMapCaptureScreen(
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "NOW WALK!",
+                                            text = "WALK TO FIRST CORNER",
                                             color = Color.White,
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 20.sp
+                                            fontSize = 18.sp
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "Walk along the walls of the room. Keep the phone pointing at the floor.",
+                                            text = "Walk to the next corner of the room, then tap MARK CORNER.",
                                             color = Color.Gray,
                                             fontSize = 12.sp,
                                             lineHeight = 15.sp
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
-                                            text = "Watch the blue line appear on the map!",
-                                            color = Color.Cyan,
+                                            text = "Corners = straight walls!",
+                                            color = Color(0xFF2196F3),
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold
                                         )
@@ -393,6 +414,19 @@ fun FloorMapCaptureScreen(
                                             fontSize = 14.sp
                                         )
                                         Spacer(modifier = Modifier.height(8.dp))
+
+                                        // Remind about HVAC equipment if none marked
+                                        if (captureState.features.isEmpty()) {
+                                            Text(
+                                                text = "TIP: Mark any dampers or vents before finishing!",
+                                                color = Color(0xFF9C27B0),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                lineHeight = 15.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+
                                         Text(
                                             text = "Tap the green FINISH button below!",
                                             color = Color.Green,
@@ -402,19 +436,39 @@ fun FloorMapCaptureScreen(
                                         )
                                     } else {
                                         // In progress - walking
-                                        Text(
-                                            text = "GOOD! KEEP GOING",
-                                            color = Color.Cyan,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 16.sp
-                                        )
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        Text(
-                                            text = "Walk along the walls. The blue line on the map shows your path.",
-                                            color = Color.White,
-                                            fontSize = 12.sp,
-                                            lineHeight = 15.sp
-                                        )
+                                        val cornerCount = captureState.cornerPoints.size
+
+                                        // Remind about corner marking if they've walked but not marked any
+                                        if (cornerCount == 0 && distanceWalked > 1.5f) {
+                                            Text(
+                                                text = "DON'T FORGET!",
+                                                color = Color.Yellow,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 16.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "Tap MARK WALL CORNER at each corner for straight walls on your map!",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                lineHeight = 15.sp
+                                            )
+                                        } else {
+                                            Text(
+                                                text = "GOOD! KEEP GOING",
+                                                color = Color.Cyan,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 16.sp
+                                            )
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            Text(
+                                                text = "Walk along the walls. Tap MARK WALL CORNER at each turn.",
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                lineHeight = 15.sp
+                                            )
+                                        }
+
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text(
                                             text = "GOAL:",
@@ -546,20 +600,106 @@ fun FloorMapCaptureScreen(
                             }
                         }
                         RecordingState.RECORDING -> {
+                            // Corner count display
+                            Text(
+                                text = "Corners marked: ${captureState.cornerPoints.size}",
+                                color = Color.Yellow,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+
+                            // MARK CORNER and ADD FEATURE buttons side by side
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // MARK WALL CORNER button
+                                Button(
+                                    onClick = onMarkCorner,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(72.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF2196F3)  // Blue
+                                    )
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "MARK WALL",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "CORNER",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "At each corner",
+                                            fontSize = 9.sp,
+                                            color = Color.White.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                }
+
+                                // ADD DAMPER/VENT button
+                                Button(
+                                    onClick = onShowFeaturePicker,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(72.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF9C27B0)  // Purple
+                                    )
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text(
+                                            text = "ADD DAMPER",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "/ VENT",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = "Mark HVAC equipment",
+                                            fontSize = 9.sp,
+                                            color = Color.White.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                }
+                            }
+
+                            // Feature count display
+                            if (captureState.features.isNotEmpty()) {
+                                Text(
+                                    text = "Features: ${captureState.features.size}",
+                                    color = Color(0xFF9C27B0),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(bottom = 4.dp)
+                                )
+                            }
+
+                            // Cancel and Finish row
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 OutlinedButton(
                                     onClick = onResetRecording,
-                                    modifier = Modifier.weight(1f).height(64.dp)
+                                    modifier = Modifier.weight(1f).height(56.dp)
                                 ) {
                                     Text(text = "CANCEL", fontSize = 14.sp)
                                 }
 
                                 Button(
                                     onClick = { onStopRecording(isNearStart) },
-                                    modifier = Modifier.weight(2f).height(64.dp),
+                                    modifier = Modifier.weight(2f).height(56.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = if (isNearStart) Color(0xFF4CAF50) else Color(0xFFFF9800)
                                     )
@@ -567,13 +707,13 @@ fun FloorMapCaptureScreen(
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text(
                                             text = if (isNearStart) "FINISH & CLOSE" else "FINISH EARLY",
-                                            fontSize = 16.sp,
+                                            fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold
                                         )
                                         if (!isNearStart) {
                                             Text(
                                                 text = "(path won't be closed)",
-                                                fontSize = 10.sp,
+                                                fontSize = 9.sp,
                                                 color = Color.White.copy(alpha = 0.7f)
                                             )
                                         }
@@ -612,7 +752,93 @@ fun FloorMapCaptureScreen(
                 }
             }
         }
+
+        // Feature picker dialog
+        if (captureState.showFeaturePicker) {
+            FeaturePickerDialog(
+                onDismiss = onHideFeaturePicker,
+                onSelectFeature = { type ->
+                    onAddFeature(type, null)
+                }
+            )
+        }
+
+        // First-time tutorial overlay
+        if (showTutorial) {
+            FirstTimeOverlay(
+                onDismiss = {
+                    markTutorialSeen(context)
+                    showTutorial = false
+                }
+            )
+        }
     }
+}
+
+@Composable
+private fun FeaturePickerDialog(
+    onDismiss: () -> Unit,
+    onSelectFeature: (FeatureType) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Add Feature",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "What would you like to mark at this location?",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.height(280.dp)
+                ) {
+                    items(FeatureType.entries.toList()) { type ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelectFeature(type) }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = type.icon,
+                                    fontSize = 32.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = type.displayName,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

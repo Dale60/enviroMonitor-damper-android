@@ -4,12 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.damperlocator.floorplan.ArTrackingState
+import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorMapCaptureState
 import com.example.damperlocator.floorplan.FloorPlan
 import com.example.damperlocator.floorplan.FloorPlanPin
 import com.example.damperlocator.floorplan.FloorPlanRepository
 import com.example.damperlocator.floorplan.PolygonCalculator
 import com.example.damperlocator.floorplan.RecordingState
+import com.example.damperlocator.floorplan.RoomFeature
 import com.example.damperlocator.floorplan.Vector2
 import com.example.damperlocator.floorplan.Vector3
 import com.example.damperlocator.sensors.CompassManager
@@ -78,7 +80,7 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * Start recording the path
+     * Start recording the path - first corner is automatically marked
      */
     fun startRecording(initialPosition: Vector3) {
         val startPos = Vector2(initialPosition.x, initialPosition.z)
@@ -86,9 +88,96 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
         _captureState.value = _captureState.value.copy(
             recordingState = RecordingState.RECORDING,
             pathPoints = listOf(startPos),
+            cornerPoints = listOf(startPos),  // First corner is the start
+            currentPosition = startPos,
             startPosition = startPos,
             distanceTraveled = 0f,
             distanceToStart = 0f
+        )
+    }
+
+    /**
+     * Mark the current position as a corner point
+     */
+    fun markCorner() {
+        val current = _captureState.value
+        if (current.recordingState != RecordingState.RECORDING) return
+
+        val pos = current.currentPosition ?: return
+        android.util.Log.d("FloorMap", "Marked corner #${current.cornerPoints.size + 1} at: $pos")
+
+        _captureState.value = current.copy(
+            cornerPoints = current.cornerPoints + pos
+        )
+    }
+
+    // ==================== Room Features ====================
+
+    /**
+     * Show the feature type picker dialog
+     */
+    fun showFeaturePicker() {
+        _captureState.value = _captureState.value.copy(showFeaturePicker = true)
+    }
+
+    /**
+     * Hide the feature type picker dialog
+     */
+    fun hideFeaturePicker() {
+        _captureState.value = _captureState.value.copy(showFeaturePicker = false)
+    }
+
+    /**
+     * Add a feature at the current position
+     */
+    fun addFeature(
+        type: FeatureType,
+        label: String? = null,
+        photoPath: String? = null,
+        bleDeviceAddress: String? = null,
+        bleDeviceName: String? = null,
+        notes: String? = null
+    ) {
+        val current = _captureState.value
+        val pos = current.currentPosition ?: return
+
+        val feature = RoomFeature(
+            type = type,
+            position = pos,
+            label = label,
+            photoPath = photoPath,
+            bleDeviceAddress = bleDeviceAddress,
+            bleDeviceName = bleDeviceName,
+            notes = notes
+        )
+
+        android.util.Log.d("FloorMap", "Added feature: ${type.displayName} at $pos")
+
+        _captureState.value = current.copy(
+            features = current.features + feature,
+            showFeaturePicker = false
+        )
+    }
+
+    /**
+     * Remove a feature by ID
+     */
+    fun removeFeature(featureId: String) {
+        val current = _captureState.value
+        _captureState.value = current.copy(
+            features = current.features.filter { it.id != featureId }
+        )
+    }
+
+    /**
+     * Update a feature's photo
+     */
+    fun updateFeaturePhoto(featureId: String, photoPath: String?) {
+        val current = _captureState.value
+        _captureState.value = current.copy(
+            features = current.features.map {
+                if (it.id == featureId) it.copy(photoPath = photoPath) else it
+            }
         )
     }
 
@@ -115,12 +204,16 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
 
             _captureState.value = current.copy(
                 pathPoints = pathPoints + newPoint,
+                currentPosition = newPoint,  // Always track current position for corner marking
                 distanceTraveled = newDistance,
                 distanceToStart = distToStart
             )
         } else {
-            // Always update distance to start for UI feedback
-            _captureState.value = current.copy(distanceToStart = distToStart)
+            // Always update current position and distance to start
+            _captureState.value = current.copy(
+                currentPosition = newPoint,
+                distanceToStart = distToStart
+            )
         }
     }
 
@@ -142,38 +235,57 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
         if (current.recordingState != RecordingState.RECORDING) return
 
         var pathPoints = current.pathPoints
+        var cornerPoints = current.cornerPoints
 
-        // Smooth the path to reduce jitter
+        // Smooth the raw path for display
         pathPoints = smoothPath(pathPoints)
 
         // If closing, add the start point at the end
-        if (closePath && pathPoints.size >= 3) {
-            pathPoints = pathPoints + pathPoints.first()
+        if (closePath) {
+            if (pathPoints.size >= 3) {
+                pathPoints = pathPoints + pathPoints.first()
+            }
+            if (cornerPoints.size >= 2) {
+                cornerPoints = cornerPoints + cornerPoints.first()
+            }
         }
 
-        // Convert path points to pins for storage
-        val pins = pathPoints.mapIndexed { index, point ->
+        android.util.Log.d("FloorMap", "Stopped recording: ${cornerPoints.size} corners, ${pathPoints.size} path points")
+
+        // Convert corner points to pins (corners are the clean floor plan)
+        val pins = cornerPoints.mapIndexed { index, point ->
             FloorPlanPin(
                 position3d = Vector3(point.x, 0f, point.y),
                 position2d = point,
-                label = if (index == 0) "Start" else null
+                label = when (index) {
+                    0 -> "Start"
+                    cornerPoints.size - 1 -> if (closePath) null else "End"
+                    else -> "Corner ${index}"
+                }
             )
         }
 
-        val perimeter = PolygonCalculator.calculatePerimeter(pathPoints, isClosed = closePath)
-        val area = if (closePath && pathPoints.size >= 4) {
-            PolygonCalculator.calculateArea(pathPoints.dropLast(1)) // Remove duplicate end point for area
+        // Calculate perimeter and area based on CORNERS (clean floor plan)
+        val perimeter = if (cornerPoints.size >= 2) {
+            PolygonCalculator.calculatePerimeter(cornerPoints, isClosed = closePath)
+        } else null
+
+        val area = if (closePath && cornerPoints.size >= 4) {
+            PolygonCalculator.calculateArea(cornerPoints.dropLast(1)) // Remove duplicate end point for area
         } else null
 
         _captureState.value = current.copy(
             recordingState = RecordingState.COMPLETED,
             pathPoints = pathPoints,
+            cornerPoints = cornerPoints,
             currentPins = pins
         )
 
-        // Update floor plan
+        // Update floor plan with corners and features
         _currentFloorPlan.value = _currentFloorPlan.value?.copy(
             pins = pins,
+            cornerPoints = cornerPoints,
+            features = current.features,  // Include all marked features
             perimeterMeters = perimeter,
             areaSquareMeters = area,
             isClosed = closePath,
@@ -188,10 +300,14 @@ class FloorMapViewModel(application: Application) : AndroidViewModel(application
         _captureState.value = _captureState.value.copy(
             recordingState = RecordingState.IDLE,
             pathPoints = emptyList(),
+            cornerPoints = emptyList(),
+            features = emptyList(),
+            currentPosition = null,
             startPosition = null,
             distanceTraveled = 0f,
             distanceToStart = null,
-            currentPins = emptyList()
+            currentPins = emptyList(),
+            showFeaturePicker = false
         )
     }
 

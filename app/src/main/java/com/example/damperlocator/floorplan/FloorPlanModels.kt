@@ -40,6 +40,8 @@ data class FloorPlan(
     val createdAtMs: Long = System.currentTimeMillis(),
     val modifiedAtMs: Long = System.currentTimeMillis(),
     val pins: List<FloorPlanPin> = emptyList(),
+    val cornerPoints: List<Vector2> = emptyList(),  // User-marked corners for clean floor plan
+    val features: List<RoomFeature> = emptyList(),  // Room features (doors, beacons, dampers, etc.)
     val northOffsetDegrees: Float = 0f,
     val referenceFloorY: Float = 0f,
     val perimeterMeters: Float? = null,
@@ -62,9 +64,13 @@ data class FloorMapCaptureState(
     // Continuous recording state
     val recordingState: RecordingState = RecordingState.IDLE,
     val pathPoints: List<Vector2> = emptyList(),
+    val cornerPoints: List<Vector2> = emptyList(),  // User-marked corners
+    val features: List<RoomFeature> = emptyList(),  // Room features placed during mapping
     val distanceTraveled: Float = 0f,
     val startPosition: Vector2? = null,
-    val distanceToStart: Float? = null
+    val distanceToStart: Float? = null,
+    val currentPosition: Vector2? = null,  // Live position for corner/feature marking
+    val showFeaturePicker: Boolean = false  // Show feature type picker dialog
 )
 
 enum class ArTrackingState {
@@ -79,3 +85,32 @@ enum class RecordingState {
     RECORDING,  // Actively recording path
     COMPLETED   // Recording finished, path closed
 }
+
+/**
+ * Types of room features that can be marked on the floor plan
+ */
+enum class FeatureType(val displayName: String, val icon: String) {
+    DOOR("Door", "🚪"),
+    BEACON("Beacon", "📡"),
+    DAMPER("Damper", "🌀"),
+    HVAC_VENT("HVAC Vent", "💨"),
+    HVAC_UNIT("HVAC Unit", "❄️"),
+    THERMOSTAT("Thermostat", "🌡️"),
+    PHOTO("Photo Point", "📷"),
+    OTHER("Other", "📍")
+}
+
+/**
+ * A room feature/appliance marked at a specific location
+ */
+data class RoomFeature(
+    val id: String = UUID.randomUUID().toString(),
+    val type: FeatureType,
+    val position: Vector2,
+    val label: String? = null,
+    val photoPath: String? = null,          // Path to attached photo
+    val bleDeviceAddress: String? = null,   // For beacons - linked BLE device
+    val bleDeviceName: String? = null,      // BLE device name if linked
+    val notes: String? = null,
+    val createdAtMs: Long = System.currentTimeMillis()
+)

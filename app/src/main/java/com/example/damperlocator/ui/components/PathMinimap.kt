@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.damperlocator.floorplan.FeatureType
+import com.example.damperlocator.floorplan.RoomFeature
 import com.example.damperlocator.floorplan.Vector2
 import kotlin.math.abs
 import kotlin.math.max
@@ -42,6 +44,8 @@ import kotlin.math.max
 @Composable
 fun PathMinimap(
     pathPoints: List<Vector2>,
+    cornerPoints: List<Vector2>,
+    features: List<RoomFeature>,
     currentPosition: Vector2?,
     isRecording: Boolean,
     distanceTraveled: Float,
@@ -178,12 +182,77 @@ fun PathMinimap(
                     path.lineTo(current.x, current.y)
                 }
 
-                // Draw the path (thicker, more visible)
+                // Draw the raw path (thinner, more faded - just for reference)
                 drawPath(
                     path = path,
-                    color = Color.Cyan,
-                    style = Stroke(width = 5f)
+                    color = Color.Cyan.copy(alpha = 0.4f),
+                    style = Stroke(width = 3f)
                 )
+
+                // Draw CORNER-BASED straight lines (the clean floor plan)
+                if (cornerPoints.size >= 2) {
+                    val cornerPath = Path()
+                    val firstCorner = toCanvas(cornerPoints.first())
+                    cornerPath.moveTo(firstCorner.x, firstCorner.y)
+
+                    for (i in 1 until cornerPoints.size) {
+                        val corner = toCanvas(cornerPoints[i])
+                        cornerPath.lineTo(corner.x, corner.y)
+                    }
+
+                    // If recording, draw line to current position from last corner
+                    if (isRecording && currentPosition != null) {
+                        val current = toCanvas(currentPosition)
+                        cornerPath.lineTo(current.x, current.y)
+                    }
+
+                    // Draw corner path (thick white/orange line)
+                    drawPath(
+                        path = cornerPath,
+                        color = Color.White,
+                        style = Stroke(width = 6f)
+                    )
+                }
+
+                // Draw corner markers (orange squares)
+                cornerPoints.forEachIndexed { index, corner ->
+                    if (index > 0) {  // Skip first corner (it's the green start)
+                        val pos = toCanvas(corner)
+                        // Draw square marker
+                        drawRect(
+                            color = Color(0xFFFF9800),  // Orange
+                            topLeft = Offset(pos.x - 6f, pos.y - 6f),
+                            size = androidx.compose.ui.geometry.Size(12f, 12f)
+                        )
+                    }
+                }
+
+                // Draw features (purple markers)
+                features.forEach { feature ->
+                    val pos = toCanvas(feature.position)
+                    val featureColor = when (feature.type) {
+                        FeatureType.DOOR -> Color(0xFF795548)      // Brown
+                        FeatureType.BEACON -> Color(0xFF00BCD4)    // Cyan
+                        FeatureType.DAMPER -> Color(0xFF9C27B0)    // Purple
+                        FeatureType.HVAC_VENT -> Color(0xFF607D8B) // Blue Grey
+                        FeatureType.HVAC_UNIT -> Color(0xFF3F51B5) // Indigo
+                        FeatureType.THERMOSTAT -> Color(0xFFFF5722) // Deep Orange
+                        FeatureType.PHOTO -> Color(0xFF8BC34A)     // Light Green
+                        FeatureType.OTHER -> Color(0xFF9E9E9E)     // Grey
+                    }
+                    // Outer glow
+                    drawCircle(
+                        color = featureColor.copy(alpha = 0.4f),
+                        radius = 12f,
+                        center = pos
+                    )
+                    // Inner circle
+                    drawCircle(
+                        color = featureColor,
+                        radius = 7f,
+                        center = pos
+                    )
+                }
 
                 // Draw start point (GREEN - fixed at center) - draw it larger
                 val startCanvas = toCanvas(startPoint)

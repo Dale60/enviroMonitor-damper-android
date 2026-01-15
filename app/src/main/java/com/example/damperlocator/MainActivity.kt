@@ -320,6 +320,18 @@ class MainActivity : ComponentActivity() {
                         onUpdatePosition = { position ->
                             floorMapVm.updatePosition(position)
                         },
+                        onMarkCorner = {
+                            floorMapVm.markCorner()
+                        },
+                        onShowFeaturePicker = {
+                            floorMapVm.showFeaturePicker()
+                        },
+                        onHideFeaturePicker = {
+                            floorMapVm.hideFeaturePicker()
+                        },
+                        onAddFeature = { type, label ->
+                            floorMapVm.addFeature(type = type, label = label)
+                        },
                         onStopRecording = { closePath ->
                             floorMapVm.stopRecording(closePath)
                         },
