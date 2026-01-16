@@ -1,7 +1,10 @@
 package com.example.damperlocator.ui.screens
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,26 +15,42 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorPlan
+import com.example.damperlocator.floorplan.MapAnchor
 import com.example.damperlocator.floorplan.PolygonCalculator
 import com.example.damperlocator.floorplan.RoomFeature
 import com.example.damperlocator.floorplan.Vector2
+import java.io.File
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -60,6 +79,10 @@ fun FloorMapPreviewScreen(
         }
         return
     }
+
+    // Photo viewing state
+    var selectedFeature by remember { mutableStateOf<RoomFeature?>(null) }
+    var selectedAnchor by remember { mutableStateOf<MapAnchor?>(null) }
 
     // Use cornerPoints if available (clean floor plan), otherwise fall back to pins
     val points2d = remember(floorPlan.cornerPoints, floorPlan.pins) {
@@ -142,6 +165,48 @@ fun FloorMapPreviewScreen(
             )
         }
 
+        // Features section with photos
+        if (floorPlan.features.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Features (${floorPlan.features.size})",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(floorPlan.features) { feature ->
+                    FeatureThumbnail(
+                        feature = feature,
+                        onClick = { selectedFeature = feature }
+                    )
+                }
+            }
+        }
+
+        // Anchors section with photos
+        if (floorPlan.anchors.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Anchors (${floorPlan.anchors.size})",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(floorPlan.anchors) { anchor ->
+                    AnchorThumbnail(
+                        anchor = anchor,
+                        onClick = { selectedAnchor = anchor }
+                    )
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(16.dp))
 
         // Canvas for 2D view
@@ -222,6 +287,22 @@ fun FloorMapPreviewScreen(
         ) {
             Text(text = "Back to List")
         }
+    }
+
+    // Feature detail dialog
+    selectedFeature?.let { feature ->
+        FeatureDetailDialog(
+            feature = feature,
+            onDismiss = { selectedFeature = null }
+        )
+    }
+
+    // Anchor detail dialog
+    selectedAnchor?.let { anchor ->
+        AnchorDetailDialog(
+            anchor = anchor,
+            onDismiss = { selectedAnchor = null }
+        )
     }
 }
 
@@ -363,4 +444,250 @@ private fun formatArea(sqMeters: Float): String {
     } else {
         "${String.format(Locale.US, "%.2f", sqMeters)} m²"
     }
+}
+
+@Composable
+private fun FeatureThumbnail(
+    feature: RoomFeature,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .width(80.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Photo or icon
+            if (feature.photoPath != null && File(feature.photoPath).exists()) {
+                val bitmap = remember(feature.photoPath) {
+                    BitmapFactory.decodeFile(feature.photoPath)
+                }
+                bitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = feature.type.displayName,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            } else {
+                Text(
+                    text = feature.type.icon,
+                    fontSize = 32.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = feature.label ?: feature.type.displayName,
+                fontSize = 10.sp,
+                maxLines = 1,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun AnchorThumbnail(
+    anchor: MapAnchor,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .width(80.dp)
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Photo
+            if (File(anchor.photoPath).exists()) {
+                val bitmap = remember(anchor.photoPath) {
+                    BitmapFactory.decodeFile(anchor.photoPath)
+                }
+                bitmap?.let {
+                    Image(
+                        bitmap = it.asImageBitmap(),
+                        contentDescription = anchor.label,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .background(Color(0xFFFF9800), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = "", fontSize = 24.sp)
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = anchor.label,
+                fontSize = 10.sp,
+                maxLines = 1,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeatureDetailDialog(
+    feature: RoomFeature,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = feature.type.icon, fontSize = 24.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = feature.label ?: feature.type.displayName,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column {
+                // Photo
+                feature.photoPath?.let { path ->
+                    if (File(path).exists()) {
+                        val bitmap = remember(path) {
+                            BitmapFactory.decodeFile(path)
+                        }
+                        bitmap?.let {
+                            Image(
+                                bitmap = it.asImageBitmap(),
+                                contentDescription = "Feature photo",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(4f / 3f)
+                                    .clip(RoundedCornerShape(8.dp)),
+                                contentScale = ContentScale.Crop
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+                }
+
+                // Details
+                Text(
+                    text = "Type: ${feature.type.displayName}",
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "Position: (${String.format(Locale.US, "%.2f", feature.position.x)}, ${String.format(Locale.US, "%.2f", feature.position.y)}) m",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+
+                feature.bleDeviceName?.let { name ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Linked device: $name",
+                        fontSize = 14.sp
+                    )
+                }
+
+                feature.notes?.let { notes ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Notes: $notes",
+                        fontSize = 14.sp,
+                        color = Color.Gray
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AnchorDetailDialog(
+    anchor: MapAnchor,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(Color(0xFFFF9800), RoundedCornerShape(4.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(text = "", fontSize = 16.sp)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = anchor.label,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column {
+                // Photo
+                if (File(anchor.photoPath).exists()) {
+                    val bitmap = remember(anchor.photoPath) {
+                        BitmapFactory.decodeFile(anchor.photoPath)
+                    }
+                    bitmap?.let {
+                        Image(
+                            bitmap = it.asImageBitmap(),
+                            contentDescription = "Anchor reference photo",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(4f / 3f)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+
+                // Details
+                Text(
+                    text = "Position: (${String.format(Locale.US, "%.2f", anchor.position.x)}, ${String.format(Locale.US, "%.2f", anchor.position.y)}) m",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+                Text(
+                    text = "Compass heading: ${anchor.compassHeading.roundToInt()}°",
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Use this anchor to continue mapping from this location in a future session.",
+                    fontSize = 12.sp,
+                    color = Color.Gray.copy(alpha = 0.7f)
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }

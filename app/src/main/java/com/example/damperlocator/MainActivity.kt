@@ -122,6 +122,10 @@ class MainActivity : ComponentActivity() {
                 var pendingPhotoPath by remember { mutableStateOf<String?>(null) }
                 var photoError by remember { mutableStateOf<String?>(null) }
 
+                // Anchor/feature photo state for floor mapping
+                var pendingAnchorPhotoPath by remember { mutableStateOf<String?>(null) }
+                var pendingFeaturePhotoPath by remember { mutableStateOf<String?>(null) }
+
                 val takePhotoLauncher = rememberLauncherForActivityResult(
                     ActivityResultContracts.TakePicture()
                 ) { success ->
@@ -132,6 +136,32 @@ class MainActivity : ComponentActivity() {
                     }
                     pendingPhotoAddress = null
                     pendingPhotoPath = null
+                }
+
+                // Launcher for anchor photos (floor mapping)
+                val takeAnchorPhotoLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.TakePicture()
+                ) { success ->
+                    val path = pendingAnchorPhotoPath
+                    if (success && path != null) {
+                        floorMapVm.saveAnchor(path)
+                    } else {
+                        floorMapVm.cancelAnchorPlacement()
+                    }
+                    pendingAnchorPhotoPath = null
+                }
+
+                // Launcher for feature photos (floor mapping)
+                val takeFeaturePhotoLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.TakePicture()
+                ) { success ->
+                    val path = pendingFeaturePhotoPath
+                    if (success && path != null) {
+                        floorMapVm.saveFeaturePhoto(path)
+                    } else {
+                        floorMapVm.cancelFeaturePhoto()
+                    }
+                    pendingFeaturePhotoPath = null
                 }
 
                 val pickPhotoLauncher = rememberLauncherForActivityResult(
@@ -343,6 +373,33 @@ class MainActivity : ComponentActivity() {
                         onTrackingStateChanged = { state, isPlane ->
                             floorMapVm.updateTrackingState(state, isPlane)
                         },
+                        // Anchor placement callbacks
+                        onStartAnchorPlacement = { label ->
+                            floorMapVm.startAnchorPlacement(label)
+                        },
+                        onConfirmAnchorPosition = {
+                            floorMapVm.confirmAnchorPosition()
+                        },
+                        onTakeAnchorPhoto = {
+                            try {
+                                val file = createAnchorPhotoFile(context)
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file
+                                )
+                                pendingAnchorPhotoPath = file.absolutePath
+                                takeAnchorPhotoLauncher.launch(uri)
+                            } catch (_: Exception) {
+                                floorMapVm.cancelAnchorPlacement()
+                            }
+                        },
+                        onCancelAnchorPlacement = {
+                            floorMapVm.cancelAnchorPlacement()
+                        },
+                        onFinishAnchorPlacement = {
+                            floorMapVm.finishAnchorPlacement()
+                        },
                         onSave = {
                             floorMapVm.saveCurrentPlan()
                             floorMapVm.stopCapture()
@@ -389,6 +446,22 @@ class MainActivity : ComponentActivity() {
         }
         val safe = address.replace(":", "").lowercase()
         return File(dir, "device_$safe.jpg")
+    }
+
+    private fun createAnchorPhotoFile(context: android.content.Context): File {
+        val dir = File(context.filesDir, "anchor_photos")
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        return File(dir, "anchor_${System.currentTimeMillis()}.jpg")
+    }
+
+    private fun createFeaturePhotoFile(context: android.content.Context, featureId: String): File {
+        val dir = File(context.filesDir, "feature_photos")
+        if (!dir.exists()) {
+            dir.mkdirs()
+        }
+        return File(dir, "feature_${featureId}.jpg")
     }
 
     private fun copyUriToFile(context: android.content.Context, uri: Uri, dest: File): Boolean {

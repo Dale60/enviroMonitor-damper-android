@@ -58,6 +58,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.damperlocator.ar.ArAvailabilityResult
 import com.example.damperlocator.ar.BackgroundRenderer
+import com.example.damperlocator.floorplan.AnchorPlacementState
 import com.example.damperlocator.floorplan.ArTrackingState
 import com.example.damperlocator.floorplan.FeatureType
 import com.example.damperlocator.floorplan.FloorMapCaptureState
@@ -97,6 +98,12 @@ fun FloorMapCaptureScreen(
     isNearStart: Boolean,
     onUpdateName: (String) -> Unit,
     onTrackingStateChanged: (ArTrackingState, Boolean) -> Unit,
+    // Anchor placement callbacks
+    onStartAnchorPlacement: (String) -> Unit,
+    onConfirmAnchorPosition: () -> Unit,
+    onTakeAnchorPhoto: () -> Unit,
+    onCancelAnchorPlacement: () -> Unit,
+    onFinishAnchorPlacement: () -> Unit,
     onSave: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -121,6 +128,10 @@ fun FloorMapCaptureScreen(
 
     // Collapsible instructions panel state
     var instructionsExpanded by remember { mutableStateOf(true) }
+
+    // Anchor placement state
+    var showAnchorDialog by remember { mutableStateOf(false) }
+    var anchorLabel by remember { mutableStateOf("Doorway") }
 
     // Feedback helper for audio/haptic
     val feedbackHelper = remember { FeedbackHelper(context) }
@@ -499,13 +510,42 @@ fun FloorMapCaptureScreen(
                                 }
                             }
 
-                            // Feature count display
-                            if (captureState.features.isNotEmpty()) {
+                            // Feature and anchor count display
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                if (captureState.features.isNotEmpty()) {
+                                    Text(
+                                        text = "Features: ${captureState.features.size}",
+                                        color = Color(0xFF9C27B0),
+                                        fontSize = 12.sp
+                                    )
+                                }
+                                if (captureState.anchors.isNotEmpty()) {
+                                    Text(
+                                        text = "Anchors: ${captureState.anchors.size}",
+                                        color = Color(0xFFFF9800),
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+
+                            // ADD ANCHOR button
+                            OutlinedButton(
+                                onClick = { showAnchorDialog = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFFFF9800)
+                                )
+                            ) {
                                 Text(
-                                    text = "Features: ${captureState.features.size}",
-                                    color = Color(0xFF9C27B0),
-                                    fontSize = 12.sp,
-                                    modifier = Modifier.padding(bottom = 4.dp)
+                                    text = "ADD ANCHOR (for incremental mapping)",
+                                    fontSize = 12.sp
                                 )
                             }
 
@@ -594,6 +634,31 @@ fun FloorMapCaptureScreen(
                     markTutorialSeen(context)
                     showTutorial = false
                 }
+            )
+        }
+
+        // Anchor label input dialog
+        if (showAnchorDialog) {
+            AnchorLabelDialog(
+                label = anchorLabel,
+                onLabelChange = { anchorLabel = it },
+                onConfirm = {
+                    showAnchorDialog = false
+                    onStartAnchorPlacement(anchorLabel)
+                },
+                onDismiss = { showAnchorDialog = false }
+            )
+        }
+
+        // Anchor placement overlay (shown when in positioning/capturing state)
+        if (captureState.anchorPlacementState != AnchorPlacementState.NONE) {
+            AnchorPlacementOverlay(
+                state = captureState.anchorPlacementState,
+                label = captureState.pendingAnchorLabel ?: "Anchor",
+                onConfirmPosition = onConfirmAnchorPosition,
+                onTakePhoto = onTakeAnchorPhoto,
+                onCancel = onCancelAnchorPlacement,
+                onDone = onFinishAnchorPlacement
             )
         }
     }
@@ -830,6 +895,194 @@ private fun CollapsibleInstructionsPanel(
                         fontSize = 10.sp
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AnchorLabelDialog(
+    label: String,
+    onLabelChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Add Anchor Point",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Anchors let you continue mapping later from this position. Walk to a doorway or notable feature.",
+                    fontSize = 14.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+                TextField(
+                    value = label,
+                    onValueChange = onLabelChange,
+                    label = { Text("Anchor Label") },
+                    placeholder = { Text("e.g., Doorway to Kitchen") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) {
+                Text("Start Placement")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AnchorPlacementOverlay(
+    state: AnchorPlacementState,
+    label: String,
+    onConfirmPosition: () -> Unit,
+    onTakePhoto: () -> Unit,
+    onCancel: () -> Unit,
+    onDone: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Status indicator
+            val (statusIcon, statusText, statusColor) = when (state) {
+                AnchorPlacementState.POSITIONING -> Triple("", "Position yourself at the anchor location", Color.Yellow)
+                AnchorPlacementState.CAPTURING -> Triple("", "Take a reference photo", Color.Cyan)
+                AnchorPlacementState.CONFIRMED -> Triple("", "Anchor saved!", Color.Green)
+                AnchorPlacementState.NONE -> Triple("", "", Color.Gray)
+            }
+
+            Text(
+                text = statusIcon,
+                fontSize = 48.sp,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            Text(
+                text = "Anchor: $label",
+                color = Color(0xFFFF9800),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Text(
+                text = statusText,
+                color = statusColor,
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(bottom = 24.dp)
+            )
+
+            when (state) {
+                AnchorPlacementState.POSITIONING -> {
+                    Text(
+                        text = "Stand at a doorway or connection point.\nThis will help you continue mapping later.",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 24.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onCancel,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancel", color = Color.White)
+                        }
+
+                        Button(
+                            onClick = onConfirmPosition,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFF9800)
+                            )
+                        ) {
+                            Text("I'm Here")
+                        }
+                    }
+                }
+
+                AnchorPlacementState.CAPTURING -> {
+                    Text(
+                        text = "Take a photo looking into the connected room.\nThis helps you find this spot again.",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 24.dp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onCancel,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancel", color = Color.White)
+                        }
+
+                        Button(
+                            onClick = onTakePhoto,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF4CAF50)
+                            )
+                        ) {
+                            Text("Take Photo")
+                        }
+                    }
+                }
+
+                AnchorPlacementState.CONFIRMED -> {
+                    Text(
+                        text = "Anchor saved successfully!\nYou can continue mapping or add more anchors.",
+                        color = Color.White.copy(alpha = 0.8f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(bottom = 24.dp)
+                    )
+
+                    Button(
+                        onClick = onDone,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50)
+                        )
+                    ) {
+                        Text("Continue Mapping")
+                    }
+                }
+
+                AnchorPlacementState.NONE -> { /* Not shown */ }
             }
         }
     }
